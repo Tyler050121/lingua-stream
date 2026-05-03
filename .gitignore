@@ -1,0 +1,62 @@
+# macOS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Local agent/runtime state
+.omx/
+.codex/
+.agents/
+
+# Secrets and local environment files
+.env
+.env.*
+*.local
+*.key
+*.pem
+
+# Python caches and virtualenvs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Node/package manager output
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local helper cache / generated media
+tools/local-asr/cache/
+tools/local-asr/.venv/
+tools/local-asr/__pycache__/
+*.mp3
+*.mp4
+*.m4a
+*.webm
+*.wav
+*.aac
+*.opus
+*.part
+
+# Generated images and scratch output
+tmp/
+
+# Extension build artifacts
+dist/
+build/
+*.zip
+*.crx
+*.pem
+
+# Logs
+logs/
+*.log

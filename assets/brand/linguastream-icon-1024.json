@@ -1,0 +1,29 @@
+{
+  "endpoint": "/v1/responses",
+  "tool": "image_generation",
+  "command": "generate",
+  "model": "gpt-5.4",
+  "image_model": "gpt-image-2",
+  "prompt": "Primary request: Use case: logo-brand\nAsset type: Chrome extension app icon and brand mark for LinguaStream\nPrimary request: create a polished icon mark for a YouTube video translator extension that transcribes English speech, translates to Chinese, and speaks the translated timeline in sync with playback\nSubject: abstract flowing language stream forming a subtle play triangle and voice waveform, with two short subtitle-line shapes suggesting bilingual captions\nStyle/medium: vector-friendly modern app icon, clean geometric shapes, premium software branding, no realistic scene\nComposition/framing: centered mark inside a rounded square app tile, strong silhouette, readable at 16px and 128px\nLighting/mood: calm, precise, helpful, lightweight\nColor palette: fresh jade green and teal with a small warm orange accent, off-white highlights, matching a clean light UI\nMaterials/textures: flat-to-subtle-depth digital gradient, crisp edges, minimal shadow\nQuality: high\nText: none\nConstraints: no letters, no words, no watermark, no people, no flags, no YouTube logo, no Google logo, no microphone hardware icon; must feel original and simple; square icon",
+  "revised_prompts": [
+    "Create a polished square app icon and brand mark for a Chrome extension called LinguaStream, logo-brand use case. Design a centered abstract symbol inside a rounded square app tile. The symbol should suggest a flowing language stream that subtly forms both a play triangle and a voice waveform, plus two short subtitle-line shapes hinting at bilingual captions. Style: vector-friendly modern app icon, clean geometric forms, premium software branding, original and simple, no realistic scene. Composition: strong silhouette, highly legible at 16px and 128px, balanced negative space, centered. Mood: calm, precise, helpful, lightweight. Color palette: fresh jade green and teal with a small warm orange accent, off-white highlights, suitable for a clean light UI. Texture/materials: flat to subtle-depth digital gradient, crisp edges, minimal shadow. Constraints: no text, no letters, no words, no watermark, no people, no flags, no YouTube logo, no Google logo, no microphone hardware icon. High quality, square icon."
+  ],
+  "response_ids": [
+    "resp_0525d504d02909590169f6c503386c8191addd91fcb511684a"
+  ],
+  "size": "1024x1024",
+  "quality": "high",
+  "background": "opaque",
+  "output_format": "png",
+  "output_compression": null,
+  "moderation": null,
+  "user": null,
+  "action": null,
+  "partial_images": null,
+  "saved_partial_images": [],
+  "session": "linguastream-brand-icon",
+  "history_turns": 3,
+  "local_session_context_used": false,
+  "output_file": "assets/brand/linguastream-icon-1024.png",
+  "output_index": 1
+}

@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "LinguaStream - Video Translator",
+  "short_name": "LinguaStream",
+  "description": "Prepares a YouTube video transcript locally, translates English speech to Simplified Chinese, and speaks it in sync with playback.",
+  "version": "0.2.2",
+  "icons": {
+    "16": "assets/icons/linguastream-icon-16.png",
+    "32": "assets/icons/linguastream-icon-32.png",
+    "48": "assets/icons/linguastream-icon-48.png",
+    "128": "assets/icons/linguastream-icon-128.png"
+  },
+  "action": {
+    "default_title": "LinguaStream",
+    "default_icon": {
+      "16": "assets/icons/linguastream-icon-16.png",
+      "32": "assets/icons/linguastream-icon-32.png",
+      "48": "assets/icons/linguastream-icon-48.png",
+      "128": "assets/icons/linguastream-icon-128.png"
+    },
+    "default_popup": "popup/popup.html"
+  },
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://*/*",
+    "http://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*"
+      ],
+      "js": [
+        "src/content/namespace.js",
+        "src/content/control-button.js",
+        "src/content/content-script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

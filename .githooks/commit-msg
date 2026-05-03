@@ -1,0 +1,29 @@
+#!/bin/sh
+
+message_file="$1"
+first_line="$(sed -n '1p' "$message_file")"
+
+case "$first_line" in
+  "Initial commit"|Merge\ *|Revert\ *)
+    exit 0
+    ;;
+esac
+
+if printf '%s\n' "$first_line" | grep -Eq '^(feat|fix|perf|style|refactor|docs|test|chore|build|ci)(\([a-zA-Z0-9._-]+\))?!?: .+'; then
+  exit 0
+fi
+
+cat >&2 <<'EOF'
+Invalid commit message.
+
+Use a Conventional Commit prefix, for example:
+  feat: add prepared voice timeline
+  fix: prevent stale playback after seek
+  perf: reuse cached translations
+  style: polish popup header
+
+Allowed types:
+  feat, fix, perf, style, refactor, docs, test, chore, build, ci
+EOF
+
+exit 1
