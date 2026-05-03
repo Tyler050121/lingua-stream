@@ -7,7 +7,7 @@ LinguaStream is a Chrome Manifest V3 extension that prepares a translated voice 
 ## What It Does
 
 1. A local helper temporarily downloads YouTube media with `yt-dlp`.
-2. Faster Whisper or OpenAI transcribes the video into timestamped English segments.
+2. Faster Whisper or Volcengine transcribes the video into timestamped English segments.
 3. The extension translates the timeline into the selected target language.
 4. The YouTube page speaks the translated timeline in sync with `video.currentTime`.
 5. Translation timelines are cached, so the same video does not need to be translated again unless you force retry.
@@ -18,7 +18,7 @@ This is an MVP for local use and early open-source development.
 
 - Supported site: YouTube video pages.
 - Default ASR path: local helper + Faster Whisper.
-- Optional ASR provider: OpenAI via the local helper.
+- Optional ASR provider: Volcengine via the backend.
 - Default TTS path: Chrome Web Speech API.
 - Translation: public Google endpoint or a custom translation API.
 - Realtime microphone/tab-audio ASR is intentionally disabled.
@@ -44,10 +44,42 @@ pip install -r requirements.txt
 uvicorn server:app --host 127.0.0.1 --port 8787
 ```
 
+Windows PowerShell:
+
+```powershell
+cd tools\local-asr
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn server:app --host 127.0.0.1 --port 8787
+```
+
+To prepare multiple videos at the same time, run the helper with multiple workers:
+
+```bash
+uvicorn server:app --host 127.0.0.1 --port 8787 --workers 2
+```
+
+The helper uses a per-video cache lock, so the same video is not downloaded or written twice concurrently. Different videos can download and transcribe in parallel. Faster Whisper defaults to one transcription task per worker to avoid saturating the CPU. Adjust it in `config/helper.json`:
+
+```json
+{
+  "whisperTranscribeConcurrency": 2
+}
+```
+
+You can also override it temporarily with an environment variable:
+
+```bash
+LINGUASTREAM_WHISPER_TRANSCRIBE_CONCURRENCY=2 uvicorn server:app --host 127.0.0.1 --port 8787
+```
+
+Volcengine ASR is mostly network-bound and is usually better suited to preparing multiple videos concurrently.
+
 In the extension popup, set:
 
 - `ASR > Provider`: `Custom`
-- `ASR > BaseURL`: `http://127.0.0.1:8787`
+- `Basic > Backend URL`: `http://127.0.0.1:8787`
 
 The extension calls:
 
@@ -69,16 +101,20 @@ The extension calls:
 
 ### ASR
 
-- `Provider`: `Custom` for the local helper, or `OpenAI` through the local helper.
-- `BaseURL`: local helper URL for `Custom`; OpenAI base URL is shown but locked when OpenAI is selected.
-- `API Key`: required for OpenAI ASR, optional for custom helper services.
-- `Model`: Faster Whisper model such as `tiny.en`, or OpenAI model such as `whisper-1`.
+- `Provider`: `Custom` for a backend-compatible ASR path, or `Volcengine` through the backend.
+- `Backend URL` lives in `Basic`; it is required for all ASR providers because the backend downloads media, extracts audio, and manages timeline preparation.
+- `BaseURL`: required for `Custom`; initialized from `Basic > Backend URL`.
+- `API Key`: optional for `Custom`.
+- `Mode`: Volcengine currently uses `Flash / Turbo`.
+- `APP ID` / `Access Token`: shown for Volcengine ASR. Copy both values from the Volcengine voice console. Current Volcengine support targets the recording-file recognition Turbo API.
+- `Model`: Faster Whisper model such as `tiny.en`, or Volcengine model such as `bigmodel`.
 
 ### Translate
 
-- `Provider`: public Google endpoint or custom API.
+- `Provider`: public Google endpoint, DeepSeek, or custom API.
 - `BaseURL`: custom translation endpoint.
 - `API Key`: optional for custom APIs.
+- `DeepSeek`: requires API Key and a model (`deepseek-chat` or `deepseek-reasoner`).
 
 ## Custom Translation API
 
@@ -132,6 +168,14 @@ LINGUASTREAM_CACHE_DIR=/absolute/path/to/cache uvicorn server:app --host 127.0.0
 
 Translated timelines are cached in Chrome extension storage. Use the retry action in the floating control to force a fresh translation pass.
 
+Translation runs with bounded background concurrency. Edit `config/runtime.js` to tune it:
+
+- Google: up to 6 segments at once.
+- DeepSeek: up to 4 segments at once.
+- Custom API: up to 4 segments at once.
+
+Concurrency only affects fresh translations. Cached sentences are reused immediately.
+
 ## YouTube Download Notes
 
 By default, the helper does not read browser cookies.
@@ -142,10 +186,25 @@ If YouTube returns `HTTP Error 403: Forbidden`, run the helper with browser cook
 LINGUASTREAM_YTDLP_COOKIES_BROWSER=chrome uvicorn server:app --host 127.0.0.1 --port 8787
 ```
 
+Windows PowerShell uses `$env:`:
+
+```powershell
+$env:LINGUASTREAM_YTDLP_COOKIES_BROWSER="chrome"
+uvicorn server:app --host 127.0.0.1 --port 8787
+```
+
 For Chrome Canary:
 
 ```bash
 LINGUASTREAM_YTDLP_COOKIES_BROWSER=chrome_canary uvicorn server:app --host 127.0.0.1 --port 8787
+```
+
+The helper auto-detects common Chrome / Chrome Canary / Edge / Brave profile roots for the current operating system. For non-standard installs, override the profile root explicitly:
+
+```bash
+LINGUASTREAM_YTDLP_COOKIES_BROWSER=chrome_canary \
+LINGUASTREAM_YTDLP_BROWSER_PROFILE="/absolute/path/to/browser/profile/root" \
+uvicorn server:app --host 127.0.0.1 --port 8787
 ```
 
 If browser cookies trigger Keychain prompts or fail, export YouTube cookies to a Netscape-format `cookies.txt` file:
@@ -153,6 +212,19 @@ If browser cookies trigger Keychain prompts or fail, export YouTube cookies to a
 ```bash
 LINGUASTREAM_YTDLP_COOKIES_FILE=/absolute/path/to/cookies.txt uvicorn server:app --host 127.0.0.1 --port 8787
 ```
+
+## Windows Support
+
+The Chrome extension can be loaded on Windows Chrome / Edge Chromium. The local helper also supports Windows with Python 3.10+ and `ffmpeg` on `PATH`.
+
+Browser cookie auto-detection covers common Windows profile roots:
+
+- Chrome: `%LOCALAPPDATA%\Google\Chrome\User Data`
+- Chrome Canary: `%LOCALAPPDATA%\Google\Chrome SxS\User Data`
+- Edge: `%LOCALAPPDATA%\Microsoft\Edge\User Data`
+- Brave: `%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data`
+
+On macOS and Linux, the helper uses an OS file lock to deduplicate the same video across worker processes. On Windows, it falls back to an in-process lock, so single-worker usage is fine; with `--workers 2+`, two separate Windows worker processes may still start the same video at the same time. Different videos can still be prepared concurrently.
 
 ## Project Structure
 
@@ -162,7 +234,7 @@ background/service-worker.js    Settings, preparation orchestration, translation
 popup/                          Extension popup UI
 src/content/control-button.js   YouTube floating control
 src/content/content-script.js   Timeline playback synced to video time
-tools/local-asr/server.py       Local yt-dlp + Faster Whisper/OpenAI helper
+tools/local-asr/server.py       Local yt-dlp + Faster Whisper/Volcengine helper
 assets/                         Icons and brand assets
 ```
 
@@ -178,4 +250,4 @@ assets/                         Icons and brand assets
 
 ## Privacy Notes
 
-API keys are stored in `chrome.storage.local`. Recognized text may be sent to the selected translation provider. If OpenAI ASR is selected, audio is sent by the local helper to OpenAI. Review provider policies before using third-party services.
+API keys are stored in `chrome.storage.local`. Recognized text may be sent to the selected translation provider. If Volcengine ASR is selected, audio is sent by the backend to Volcengine. Review provider policies before using third-party services.

@@ -4,7 +4,11 @@ const DEFAULT_SETTINGS = {
   recognizerType: "custom",
   asrProvider: "custom",
   asrEndpoint: "http://127.0.0.1:8787",
-  asrApiKey: "",
+  asrCustomBaseUrl: "",
+  asrCustomApiKey: "",
+  asrVolcengineMode: "turbo",
+  asrVolcengineAppId: "",
+  asrVolcengineAccessToken: "",
   asrModel: "",
   duckVolumeLevel: 0.25,
   ttsProvider: "browser",
@@ -16,11 +20,14 @@ const DEFAULT_SETTINGS = {
   translatorType: "publicGoogle",
   apiEndpoint: "",
   apiKey: "",
-  settingsVersion: 10
+  deepSeekApiKey: "",
+  deepSeekModel: "deepseek-chat",
+  settingsVersion: 15
 };
 
-const OPENAI_ASR_BASE_URL = "https://api.openai.com/v1";
 const MIN_PANEL_HEIGHT = 78;
+const PANEL_HEIGHT_BUFFER = 2;
+const DEFAULT_ASR_PANEL_PROVIDER = "custom";
 const PANEL_HEIGHT_SOURCE = "recognition";
 
 const fields = {
@@ -31,12 +38,17 @@ const fields = {
   targetLanguage: document.querySelector("#targetLanguage"),
   asrProvider: document.querySelector("#asrProvider"),
   asrEndpointField: document.querySelector("#asrEndpointField"),
-  asrApiKeyField: document.querySelector("#asrApiKeyField"),
+  asrCustomBaseUrlField: document.querySelector("#asrCustomBaseUrlField"),
+  asrCustomApiKeyField: document.querySelector("#asrCustomApiKeyField"),
+  asrVolcengineModeField: document.querySelector("#asrVolcengineModeField"),
+  asrVolcengineAppIdField: document.querySelector("#asrVolcengineAppIdField"),
+  asrVolcengineAccessTokenField: document.querySelector("#asrVolcengineAccessTokenField"),
   asrBaseUrlRequired: document.querySelector("#asrBaseUrlRequired"),
-  asrApiKeyRequired: document.querySelector("#asrApiKeyRequired"),
   asrModelField: document.querySelector("#asrModelField"),
   apiEndpointField: document.querySelector("#apiEndpointField"),
   apiKeyField: document.querySelector("#apiKeyField"),
+  deepSeekApiKeyField: document.querySelector("#deepSeekApiKeyField"),
+  deepSeekModelField: document.querySelector("#deepSeekModelField"),
   ttsBaseUrlField: document.querySelector("#ttsBaseUrlField"),
   ttsApiKeyField: document.querySelector("#ttsApiKeyField"),
   ttsModelField: document.querySelector("#ttsModelField"),
@@ -51,18 +63,23 @@ const fields = {
   ttsVolumeValue: document.querySelector("#ttsVolumeValue"),
   ttsVoice: document.querySelector("#ttsVoice"),
   asrEndpoint: document.querySelector("#asrEndpoint"),
-  asrApiKey: document.querySelector("#asrApiKey"),
+  asrCustomBaseUrl: document.querySelector("#asrCustomBaseUrl"),
+  asrCustomApiKey: document.querySelector("#asrCustomApiKey"),
+  asrVolcengineMode: document.querySelector("#asrVolcengineMode"),
+  asrVolcengineAppId: document.querySelector("#asrVolcengineAppId"),
+  asrVolcengineAccessToken: document.querySelector("#asrVolcengineAccessToken"),
   asrModel: document.querySelector("#asrModel"),
   translatorType: document.querySelector("#translatorType"),
   apiEndpoint: document.querySelector("#apiEndpoint"),
   apiKey: document.querySelector("#apiKey"),
+  deepSeekApiKey: document.querySelector("#deepSeekApiKey"),
+  deepSeekModel: document.querySelector("#deepSeekModel"),
   status: document.querySelector("#status")
 };
 
 let saveTimer = null;
 const customSelects = new Map();
 let openSelect = null;
-let lastCustomAsrEndpoint = DEFAULT_SETTINGS.asrEndpoint;
 
 init();
 
@@ -70,6 +87,7 @@ async function init() {
   const settings = await loadSettings();
   render(settings);
   installCustomSelects();
+  bindPasswordToggles();
   bindTabs();
   bindEvents();
   bindVoiceUpdates();
@@ -105,13 +123,17 @@ function render(settings) {
   fields.duckVolumeValue.textContent = `${Math.round(duckLevel * 100)}%`;
   renderVoiceOptions(settings.ttsVoiceURI || "", fields.targetLanguage.value);
   fields.asrEndpoint.value = settings.asrEndpoint || "";
-  lastCustomAsrEndpoint = normalizeHelperEndpoint(settings.asrEndpoint || DEFAULT_SETTINGS.asrEndpoint);
-  fields.asrApiKey.value = settings.asrApiKey || "";
+  fields.asrCustomBaseUrl.value = settings.asrCustomBaseUrl || settings.asrEndpoint || "";
+  fields.asrCustomApiKey.value = settings.asrCustomApiKey || "";
+  fields.asrVolcengineMode.value = normalizeVolcengineMode(settings.asrVolcengineMode);
+  fields.asrVolcengineAppId.value = settings.asrVolcengineAppId || "";
+  fields.asrVolcengineAccessToken.value = settings.asrVolcengineAccessToken || "";
   fields.asrModel.value = settings.asrModel || "";
-  fields.translatorType.value =
-    settings.translatorType === "api" ? "api" : "publicGoogle";
+  fields.translatorType.value = normalizeTranslatorType(settings.translatorType);
   fields.apiEndpoint.value = settings.apiEndpoint || "";
   fields.apiKey.value = settings.apiKey || "";
+  fields.deepSeekApiKey.value = settings.deepSeekApiKey || "";
+  fields.deepSeekModel.value = normalizeDeepSeekModel(settings.deepSeekModel);
   updateConditionalFields();
 }
 
@@ -127,14 +149,37 @@ function bindEvents() {
     fields.ttsVolume,
     fields.ttsVoice,
     fields.asrEndpoint,
-    fields.asrApiKey,
+    fields.asrCustomBaseUrl,
+    fields.asrCustomApiKey,
+    fields.asrVolcengineMode,
+    fields.asrVolcengineAppId,
+    fields.asrVolcengineAccessToken,
     fields.asrModel,
     fields.translatorType,
     fields.apiEndpoint,
-    fields.apiKey
+    fields.apiKey,
+    fields.deepSeekApiKey,
+    fields.deepSeekModel
   ]) {
     element.addEventListener("input", scheduleSave);
     element.addEventListener("change", scheduleSave);
+  }
+}
+
+function bindPasswordToggles() {
+  for (const button of document.querySelectorAll("[data-password-toggle]")) {
+    const input = document.getElementById(button.dataset.passwordToggle);
+    if (!input) continue;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (input.disabled) return;
+      const visible = input.type === "password";
+      input.type = visible ? "text" : "password";
+      button.setAttribute("aria-pressed", String(visible));
+      button.setAttribute("aria-label", visible ? "Hide API Key" : "Show API Key");
+      input.focus({ preventScroll: true });
+    });
   }
 }
 
@@ -158,6 +203,7 @@ function activateTab(tabName) {
     panel.hidden = !active;
     panel.classList.toggle("is-active", active);
   }
+  setFixedPanelHeight();
 }
 
 function scheduleSave() {
@@ -199,14 +245,18 @@ function readSettings() {
     ttsModel: fields.ttsModel.value.trim(),
     ttsVolume: Number(fields.ttsVolume.value) / 100,
     ttsVoiceURI: fields.ttsVoice.value,
-    asrEndpoint: normalizeAsrProvider(fields.asrProvider.value) === "custom"
-      ? normalizeHelperEndpoint(fields.asrEndpoint.value)
-      : normalizeHelperEndpoint(lastCustomAsrEndpoint),
-    asrApiKey: fields.asrApiKey.value.trim(),
+    asrEndpoint: normalizeHelperEndpoint(fields.asrEndpoint.value),
+    asrCustomBaseUrl: normalizeHelperEndpoint(fields.asrCustomBaseUrl.value || fields.asrEndpoint.value),
+    asrCustomApiKey: fields.asrCustomApiKey.value.trim(),
+    asrVolcengineMode: normalizeVolcengineMode(fields.asrVolcengineMode.value),
+    asrVolcengineAppId: fields.asrVolcengineAppId.value.trim(),
+    asrVolcengineAccessToken: fields.asrVolcengineAccessToken.value.trim(),
     asrModel: fields.asrModel.value.trim(),
-    translatorType: fields.translatorType.value,
+    translatorType: normalizeTranslatorType(fields.translatorType.value),
     apiEndpoint: fields.apiEndpoint.value.trim(),
-    apiKey: fields.apiKey.value.trim()
+    apiKey: fields.apiKey.value.trim(),
+    deepSeekApiKey: fields.deepSeekApiKey.value.trim(),
+    deepSeekModel: normalizeDeepSeekModel(fields.deepSeekModel.value)
   };
 }
 
@@ -289,18 +339,10 @@ function updateConditionalFields() {
   const asrProvider = normalizeAsrProvider(fields.asrProvider.value);
   const ttsProvider = normalizeTtsProvider(fields.ttsProvider.value);
   const isApi = fields.translatorType.value === "api";
+  const isDeepSeek = fields.translatorType.value === "deepseek";
   const isCustomAsr = asrProvider === "custom";
-  const isOpenAiAsr = asrProvider === "openai";
+  const isVolcengineAsr = asrProvider === "volcengine";
   const isCustomTts = ttsProvider === "custom";
-
-  if (isOpenAiAsr) {
-    if (fields.asrEndpoint.value && fields.asrEndpoint.value !== OPENAI_ASR_BASE_URL) {
-      lastCustomAsrEndpoint = normalizeHelperEndpoint(fields.asrEndpoint.value);
-    }
-    fields.asrEndpoint.value = OPENAI_ASR_BASE_URL;
-  } else if (!fields.asrEndpoint.value || fields.asrEndpoint.value === OPENAI_ASR_BASE_URL) {
-    fields.asrEndpoint.value = lastCustomAsrEndpoint;
-  }
 
   fields.ttsBaseUrlField.hidden = !isCustomTts;
   fields.ttsApiKeyField.hidden = !isCustomTts;
@@ -312,57 +354,142 @@ function updateConditionalFields() {
   fields.ttsVoice.disabled = isCustomTts;
 
   fields.asrEndpointField.hidden = false;
-  fields.asrEndpoint.disabled = !isCustomAsr;
-  fields.asrApiKeyField.hidden = false;
-  fields.asrApiKey.disabled = false;
-  fields.asrBaseUrlRequired.hidden = !isCustomAsr;
-  fields.asrApiKeyRequired.hidden = !isOpenAiAsr;
-  fields.asrModel.placeholder = isOpenAiAsr ? "Default whisper-1" : "Default tiny.en";
+  fields.asrEndpoint.disabled = false;
+  fields.asrBaseUrlRequired.hidden = false;
+  if (!fields.asrCustomBaseUrl.value) {
+    fields.asrCustomBaseUrl.value = fields.asrEndpoint.value || DEFAULT_SETTINGS.asrEndpoint;
+  }
+  fields.asrCustomBaseUrlField.hidden = !isCustomAsr;
+  fields.asrCustomApiKeyField.hidden = !isCustomAsr;
+  fields.asrVolcengineModeField.hidden = !isVolcengineAsr;
+  fields.asrCustomBaseUrl.disabled = !isCustomAsr;
+  fields.asrCustomApiKey.disabled = !isCustomAsr;
+  fields.asrVolcengineMode.disabled = !isVolcengineAsr;
+  fields.asrVolcengineAppIdField.hidden = !isVolcengineAsr;
+  fields.asrVolcengineAccessTokenField.hidden = !isVolcengineAsr;
+  fields.asrVolcengineAppId.disabled = !isVolcengineAsr;
+  fields.asrVolcengineAccessToken.disabled = !isVolcengineAsr;
+  fields.asrModel.placeholder = isVolcengineAsr
+      ? "Default bigmodel"
+      : "Default tiny.en";
   fields.apiEndpointField.hidden = !isApi;
   fields.apiKeyField.hidden = !isApi;
+  fields.deepSeekApiKeyField.hidden = !isDeepSeek;
+  fields.deepSeekModelField.hidden = !isDeepSeek;
   fields.apiEndpoint.disabled = !isApi;
   fields.apiKey.disabled = !isApi;
+  fields.deepSeekApiKey.disabled = !isDeepSeek;
+  fields.deepSeekModel.disabled = !isDeepSeek;
 }
 
 function normalizeAsrProvider(provider) {
-  return provider === "openai" ? "openai" : "custom";
+  return provider === "volcengine" ? "volcengine" : "custom";
+}
+
+function normalizeVolcengineMode(mode) {
+  return mode === "turbo" ? "turbo" : "turbo";
 }
 
 function normalizeTtsProvider(provider) {
   return provider === "custom" ? "custom" : "browser";
 }
 
+function normalizeTranslatorType(provider) {
+  if (provider === "api" || provider === "deepseek") return provider;
+  return "publicGoogle";
+}
+
+function normalizeDeepSeekModel(model) {
+  return model === "deepseek-reasoner" ? "deepseek-reasoner" : "deepseek-chat";
+}
+
 function setFixedPanelHeight() {
+  updateConditionalFields();
+  const activePanel = fields.tabPanels.find((panel) => panel.classList.contains("is-active"));
   const sourcePanel = fields.tabPanels.find((panel) => panel.dataset.tabPanel === PANEL_HEIGHT_SOURCE);
   if (!sourcePanel) return;
-  const restore = {
-    hidden: sourcePanel.hidden,
-    position: sourcePanel.style.position,
-    visibility: sourcePanel.style.visibility,
-    pointerEvents: sourcePanel.style.pointerEvents,
-    left: sourcePanel.style.left,
-    right: sourcePanel.style.right,
-    top: sourcePanel.style.top
+  const sourceRestore = capturePanelState(sourcePanel);
+  const activeRestore = activePanel ? capturePanelState(activePanel) : null;
+  const conditionalFields = {
+    customBaseUrl: fields.asrCustomBaseUrlField,
+    customApiKey: fields.asrCustomApiKeyField,
+    volcengineMode: fields.asrVolcengineModeField,
+    volcengineAppId: fields.asrVolcengineAppIdField,
+    volcengineAccessToken: fields.asrVolcengineAccessTokenField
   };
-  if (sourcePanel.hidden) {
-    sourcePanel.hidden = false;
-    sourcePanel.style.position = "absolute";
-    sourcePanel.style.visibility = "hidden";
-    sourcePanel.style.pointerEvents = "none";
-    sourcePanel.style.left = "0";
-    sourcePanel.style.right = "0";
-    sourcePanel.style.top = "0";
-  }
-  const nextHeight = Math.max(MIN_PANEL_HEIGHT, Math.ceil(sourcePanel.scrollHeight));
+  const originalHidden = new Map(
+    Object.values(conditionalFields)
+      .filter(Boolean)
+      .map((field) => [field, field.hidden])
+  );
+  exposePanelForMeasurement(sourcePanel);
+  const defaultHeight = Math.max(
+    MIN_PANEL_HEIGHT,
+    measureAsrPanelHeight(sourcePanel, conditionalFields, DEFAULT_ASR_PANEL_PROVIDER)
+  );
+  restoreConditionalFields(originalHidden);
+  restorePanelState(sourcePanel, sourceRestore);
+
+  const activeHeight = activePanel
+    ? Math.max(MIN_PANEL_HEIGHT, measurePanelHeight(activePanel))
+    : defaultHeight;
+  if (activePanel && activeRestore) restorePanelState(activePanel, activeRestore);
+  const nextHeight = Math.max(defaultHeight, activeHeight) + PANEL_HEIGHT_BUFFER;
   fields.popup.style.setProperty("--panel-height", `${nextHeight}px`);
-  if (restore.hidden) {
-    sourcePanel.hidden = restore.hidden;
-    sourcePanel.style.position = restore.position;
-    sourcePanel.style.visibility = restore.visibility;
-    sourcePanel.style.pointerEvents = restore.pointerEvents;
-    sourcePanel.style.left = restore.left;
-    sourcePanel.style.right = restore.right;
-    sourcePanel.style.top = restore.top;
+  restoreConditionalFields(originalHidden);
+}
+
+function measureAsrPanelHeight(sourcePanel, conditionalFields, provider) {
+  const isVolcengine = provider === "volcengine";
+  conditionalFields.customBaseUrl.hidden = isVolcengine;
+  conditionalFields.customApiKey.hidden = isVolcengine;
+  conditionalFields.volcengineMode.hidden = !isVolcengine;
+  conditionalFields.volcengineAppId.hidden = !isVolcengine;
+  conditionalFields.volcengineAccessToken.hidden = !isVolcengine;
+  return Math.ceil(sourcePanel.scrollHeight);
+}
+
+function measurePanelHeight(panel) {
+  exposePanelForMeasurement(panel);
+  return Math.ceil(panel.scrollHeight);
+}
+
+function capturePanelState(panel) {
+  return {
+    hidden: panel.hidden,
+    position: panel.style.position,
+    visibility: panel.style.visibility,
+    pointerEvents: panel.style.pointerEvents,
+    left: panel.style.left,
+    right: panel.style.right,
+    top: panel.style.top
+  };
+}
+
+function exposePanelForMeasurement(panel) {
+  if (!panel.hidden) return;
+  panel.hidden = false;
+  panel.style.position = "absolute";
+  panel.style.visibility = "hidden";
+  panel.style.pointerEvents = "none";
+  panel.style.left = "0";
+  panel.style.right = "0";
+  panel.style.top = "0";
+}
+
+function restorePanelState(panel, state) {
+  panel.hidden = state.hidden;
+  panel.style.position = state.position;
+  panel.style.visibility = state.visibility;
+  panel.style.pointerEvents = state.pointerEvents;
+  panel.style.left = state.left;
+  panel.style.right = state.right;
+  panel.style.top = state.top;
+}
+
+function restoreConditionalFields(originalHidden) {
+  for (const [field, hidden] of originalHidden.entries()) {
+    field.hidden = hidden;
   }
 }
 

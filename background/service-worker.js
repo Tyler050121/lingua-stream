@@ -4,7 +4,11 @@ const DEFAULT_SETTINGS = {
   recognizerType: "custom",
   asrProvider: "custom",
   asrEndpoint: "http://127.0.0.1:8787",
-  asrApiKey: "",
+  asrCustomBaseUrl: "",
+  asrCustomApiKey: "",
+  asrVolcengineMode: "turbo",
+  asrVolcengineAppId: "",
+  asrVolcengineAccessToken: "",
   asrModel: "",
   duckVolumeLevel: 0.25,
   ttsProvider: "browser",
@@ -16,7 +20,9 @@ const DEFAULT_SETTINGS = {
   translatorType: "publicGoogle",
   apiEndpoint: "",
   apiKey: "",
-  settingsVersion: 10
+  deepSeekApiKey: "",
+  deepSeekModel: "deepseek-chat",
+  settingsVersion: 15
 };
 
 const SUPPORTED_TARGET_LANGUAGES = new Set(["zh-CN", "zh-TW", "ja-JP", "ko-KR", "en-US"]);
@@ -24,8 +30,20 @@ const SUPPORTED_TARGET_LANGUAGES = new Set(["zh-CN", "zh-TW", "ja-JP", "ko-KR", 
 const preparePorts = new Map();
 const prepareSessions = new Map();
 const translationCache = new Map();
+const translationInFlight = new Map();
 const TIMELINE_CACHE_PREFIX = "linguastream:timeline:";
 const TRANSLATION_CACHE_PREFIX = "linguastream:translation:";
+const RUNTIME_CONFIG = globalThis.LinguaStreamRuntimeConfig || {};
+const TRANSLATION_CONCURRENCY = {
+  publicGoogle: 6,
+  deepseek: 4,
+  api: 4,
+  ...(RUNTIME_CONFIG.translationConcurrency || {})
+};
+const PARTIAL_PLAYBACK_MIN_SEGMENTS = Math.max(
+  1,
+  Number(RUNTIME_CONFIG.partialPlaybackMinSegments) || 20
+);
 
 chrome.runtime.onInstalled.addListener(async () => {
   await getSettings();
@@ -119,7 +137,7 @@ async function getSettings() {
     settings.targetLanguage = DEFAULT_SETTINGS.targetLanguage;
   }
   settings.recognizerType = "custom";
-  if (!["custom", "openai"].includes(settings.asrProvider)) {
+  if (!["custom", "volcengine"].includes(settings.asrProvider)) {
     settings.asrProvider = DEFAULT_SETTINGS.asrProvider;
   }
   if (!["browser", "custom"].includes(settings.ttsProvider)) {
@@ -127,6 +145,15 @@ async function getSettings() {
   }
   if (!settings.asrEndpoint) {
     settings.asrEndpoint = DEFAULT_SETTINGS.asrEndpoint;
+  }
+  if (!settings.asrVolcengineMode) {
+    settings.asrVolcengineMode = DEFAULT_SETTINGS.asrVolcengineMode;
+  }
+  if (!settings.asrCustomBaseUrl) {
+    settings.asrCustomBaseUrl = settings.asrEndpoint || DEFAULT_SETTINGS.asrEndpoint;
+  }
+  if (!["deepseek-chat", "deepseek-reasoner"].includes(settings.deepSeekModel)) {
+    settings.deepSeekModel = DEFAULT_SETTINGS.deepSeekModel;
   }
   delete settings.enabled;
 
@@ -145,7 +172,7 @@ function sanitizeSettings(settings) {
     clean.targetLanguage = settings.targetLanguage;
   }
   clean.recognizerType = "custom";
-  clean.asrProvider = settings.asrProvider === "openai" ? "openai" : "custom";
+  clean.asrProvider = settings.asrProvider === "volcengine" ? "volcengine" : "custom";
   if (typeof settings.duckOriginalAudio === "boolean") clean.duckOriginalAudio = settings.duckOriginalAudio;
   if (typeof settings.duckVolumeLevel === "number") {
     clean.duckVolumeLevel = Math.min(1, Math.max(0, settings.duckVolumeLevel));
@@ -161,10 +188,23 @@ function sanitizeSettings(settings) {
   if (typeof settings.asrEndpoint === "string") {
     clean.asrEndpoint = settings.asrEndpoint.trim() || DEFAULT_SETTINGS.asrEndpoint;
   }
-  if (typeof settings.asrApiKey === "string") clean.asrApiKey = settings.asrApiKey.trim();
+  if (typeof settings.asrCustomBaseUrl === "string") {
+    clean.asrCustomBaseUrl = settings.asrCustomBaseUrl.trim() || clean.asrEndpoint || DEFAULT_SETTINGS.asrEndpoint;
+  }
+  if (typeof settings.asrCustomApiKey === "string") {
+    clean.asrCustomApiKey = settings.asrCustomApiKey.trim();
+  }
+  clean.asrVolcengineMode = settings.asrVolcengineMode === "turbo" ? "turbo" : "turbo";
+  if (typeof settings.asrVolcengineAppId === "string") {
+    clean.asrVolcengineAppId = settings.asrVolcengineAppId.trim();
+  }
+  if (typeof settings.asrVolcengineAccessToken === "string") {
+    clean.asrVolcengineAccessToken = settings.asrVolcengineAccessToken.trim();
+  }
   if (typeof settings.asrModel === "string") clean.asrModel = settings.asrModel.trim();
   if (
     settings.translatorType === "publicGoogle" ||
+    settings.translatorType === "deepseek" ||
     settings.translatorType === "api" ||
     settings.translatorType === "custom"
   ) {
@@ -174,15 +214,22 @@ function sanitizeSettings(settings) {
   }
   if (typeof settings.apiEndpoint === "string") clean.apiEndpoint = settings.apiEndpoint.trim();
   if (typeof settings.apiKey === "string") clean.apiKey = settings.apiKey.trim();
+  if (typeof settings.deepSeekApiKey === "string") {
+    clean.deepSeekApiKey = settings.deepSeekApiKey.trim();
+  }
+  clean.deepSeekModel = settings.deepSeekModel === "deepseek-reasoner"
+    ? "deepseek-reasoner"
+    : "deepseek-chat";
   return clean;
 }
 
 async function prepareVideo(tabId, explicitUrl, force = false, requestId = 0) {
   const settings = await getSettings();
-  if (!settings.asrEndpoint) {
+  const backendUrl = getPrepareBackendUrl(settings);
+  if (!backendUrl) {
     return {
       ok: false,
-      error: "请先配置本地 helper endpoint，例如 http://127.0.0.1:8787"
+      error: "请先配置 Backend URL，例如 http://127.0.0.1:8787"
     };
   }
 
@@ -192,7 +239,10 @@ async function prepareVideo(tabId, explicitUrl, force = false, requestId = 0) {
   const prepareKey = `${tabId || "no-tab"}:${normalizePrepareUrl(url)}`;
   const existingJob = prepareSessions.get(prepareKey);
   if (existingJob && !existingJob.canceled) {
-    notifyPrepareProgress(tabId, "当前视频已经在生成中，请稍等...", { requestId });
+    notifyPrepareProgress(tabId, "生成中", {
+      requestId,
+      statusKind: "busy"
+    });
     return {
       ok: false,
       inProgress: true,
@@ -204,12 +254,13 @@ async function prepareVideo(tabId, explicitUrl, force = false, requestId = 0) {
     key: prepareKey,
     requestId,
     progressJobId: createProgressJobId(requestId),
+    recognizer: getRecognizerStatus(settings),
     canceled: false,
     controller: new AbortController()
   };
   job.progressPoll = pollHelperProgress(
     tabId,
-    buildProgressEndpoint(buildPrepareEndpoint(settings.asrEndpoint), job.progressJobId),
+    buildProgressEndpoint(buildPrepareEndpoint(backendUrl), job.progressJobId),
     requestId,
     job
   );
@@ -254,11 +305,13 @@ async function cancelPrepare(tabId, explicitUrl, requestId = 0) {
 }
 
 async function runPrepareVideo(tabId, url, settings, force = false, requestId = 0, job = null) {
-  const prepareEndpoint = buildPrepareEndpoint(settings.asrEndpoint);
-  notifyPrepareProgress(tabId, "正在生成声译时间线...", {
+  const prepareEndpoint = buildPrepareEndpoint(getPrepareBackendUrl(settings));
+  notifyPrepareProgress(tabId, "生成中", {
     phase: "preparing",
     progress: 3,
-    requestId
+    requestId,
+    statusKind: "prepare",
+    recognizer: getRecognizerStatus(settings)
   });
   throwIfCanceled(job);
 
@@ -272,13 +325,13 @@ async function runPrepareVideo(tabId, url, settings, force = false, requestId = 
       language: "en",
       job_id: job?.progressJobId || "",
       recognizer_provider: settings.asrProvider || "custom",
-      recognizer_api_key: settings.asrApiKey || ""
+      recognizer_api_key: buildRecognizerCredential(settings)
     })
   });
   throwIfCanceled(job);
 
   if (!response.ok) {
-    throw new Error(`Prepare helper failed with HTTP ${response.status}`);
+    throw new Error(await formatPrepareError(response));
   }
 
   const prepared = await response.json();
@@ -289,10 +342,14 @@ async function runPrepareVideo(tabId, url, settings, force = false, requestId = 
     return { ok: false, error: "本地 helper 没有识别到可用语音段落" };
   }
 
-  notifyPrepareProgress(tabId, `已识别 ${segments.length} 段，正在检查缓存...`, {
+  const translatorLabel = getTranslatorLabel(settings);
+  notifyPrepareProgress(tabId, "查缓存", {
     phase: "preparing",
     progress: 35,
-    requestId
+    requestId,
+    statusKind: "cache-check",
+    translator: getTranslatorStatus(settings),
+    total: segments.length
   });
   throwIfCanceled(job);
 
@@ -305,10 +362,14 @@ async function runPrepareVideo(tabId, url, settings, force = false, requestId = 
       timeline: cachedTimeline,
       requestId
     });
-    notifyPrepareProgress(tabId, `已复用中文缓存：${cachedTimeline.segments.length} 段`, {
+    notifyPrepareProgress(tabId, "声译就绪", {
       phase: "ready",
       progress: 100,
-      requestId
+      requestId,
+      statusKind: "cache-hit",
+      translator: getTranslatorStatus(settings),
+      cache: cachedTimeline.segments.length,
+      total: cachedTimeline.segments.length
     });
     return {
       ok: true,
@@ -320,10 +381,16 @@ async function runPrepareVideo(tabId, url, settings, force = false, requestId = 
     };
   }
 
-  notifyPrepareProgress(tabId, `${force ? "正在重新翻译" : "未命中中文缓存，正在翻译"} 0/${segments.length}...`, {
+  notifyPrepareProgress(tabId, force ? "重译" : "翻译", {
     phase: "preparing",
     progress: 38,
-    requestId
+    requestId,
+    statusKind: force ? "translate-force" : "translate",
+    translator: getTranslatorStatus(settings),
+    current: 0,
+    total: segments.length,
+    cache: 0,
+    fresh: 0
   });
 
   const translated = await translatePreparedSegments(tabId, segments, settings, force, requestId, job);
@@ -344,10 +411,13 @@ async function runPrepareVideo(tabId, url, settings, force = false, requestId = 
     timeline,
     requestId
   });
-  notifyPrepareProgress(tabId, `声译就绪：${timeline.segments.length} 段`, {
+  notifyPrepareProgress(tabId, "就绪", {
     phase: "ready",
     progress: 100,
-    requestId
+    requestId,
+    statusKind: "ready",
+    translator: getTranslatorStatus(settings),
+    total: timeline.segments.length
   });
 
   return {
@@ -359,27 +429,130 @@ async function runPrepareVideo(tabId, url, settings, force = false, requestId = 
   };
 }
 
+function getPrepareBackendUrl(settings) {
+  if (settings.asrProvider === "custom") {
+    return settings.asrCustomBaseUrl || settings.asrEndpoint || DEFAULT_SETTINGS.asrEndpoint;
+  }
+  return settings.asrEndpoint || DEFAULT_SETTINGS.asrEndpoint;
+}
+
+function buildRecognizerCredential(settings) {
+  if (settings.asrProvider === "custom") {
+    return settings.asrCustomApiKey || "";
+  }
+  const appId = String(settings.asrVolcengineAppId || "").trim();
+  const accessToken = String(settings.asrVolcengineAccessToken || "").trim();
+  if (appId && accessToken) return `${appId}:${accessToken}`;
+  return "";
+}
+
+async function formatPrepareError(response) {
+  const rawText = await response.text().catch(() => "");
+  let detail = rawText.trim();
+  try {
+    const payload = JSON.parse(rawText);
+    detail = typeof payload.detail === "string"
+      ? payload.detail
+      : JSON.stringify(payload.detail || payload);
+  } catch {}
+  if (response.status === 422 && /usable speech segments|没有识别|未识别/.test(detail)) {
+    return "未识别到语音段落";
+  }
+  return detail
+    ? `Prepare helper failed with HTTP ${response.status}: ${detail}`
+    : `Prepare helper failed with HTTP ${response.status}`;
+}
+
 async function translatePreparedSegments(tabId, segments, settings, force = false, requestId = 0, job = null) {
-  const result = [];
-  for (let index = 0; index < segments.length; index += 1) {
+  const result = new Array(segments.length);
+  const targetLanguage = normalizeTargetLanguage(settings.targetLanguage);
+  const translatorLabel = getTranslatorLabel(settings);
+  const cacheScope = getTranslatorCacheScope(settings, targetLanguage);
+  const concurrency = getTranslationConcurrency(settings);
+  const cacheStats = {
+    memoryHits: 0,
+    persistentHits: 0,
+    newTranslations: 0
+  };
+  console.info("[LinguaStream] prepare translation", {
+    provider: translatorLabel,
+    cacheScope,
+    force,
+    segmentCount: segments.length,
+    concurrency
+  });
+  let nextIndex = 0;
+  let completed = 0;
+  let lastPartialCount = 0;
+
+  async function translateNextSegment() {
+    while (nextIndex < segments.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await translateSegmentAt(index);
+    }
+  }
+
+  async function translateSegmentAt(index) {
     throwIfCanceled(job);
     const segment = segments[index];
-    const translations = await translateTexts([segment.text], settings, { force });
+    const translations = await translateTexts([segment.text], settings, { force, cacheStats });
     throwIfCanceled(job);
-    result.push({
+    result[index] = {
       id: `prepared-${index}`,
       start: Number(segment.start) || 0,
       end: Number(segment.end) || Number(segment.start) + 3,
       sourceText: segment.text,
       text: normalizeText(translations[0] || "")
-    });
-    notifyPrepareProgress(tabId, `翻译中 ${index + 1}/${segments.length}`, {
+    };
+    completed += 1;
+    const readySegments = getContiguousReadySegments(result);
+    if (
+      readySegments.length >= PARTIAL_PLAYBACK_MIN_SEGMENTS &&
+      (lastPartialCount === 0 || readySegments.length - lastPartialCount >= 5)
+    ) {
+      notifyPartialTimeline(tabId, readySegments, requestId, settings, readySegments.length);
+      lastPartialCount = readySegments.length;
+    }
+    notifyPrepareProgress(tabId, "翻译", {
       phase: "preparing",
-      progress: 38 + Math.round(((index + 1) / segments.length) * 60),
-      requestId
+      progress: 38 + Math.round((completed / segments.length) * 60),
+      requestId,
+      statusKind: "translate",
+      translator: getTranslatorStatus(settings),
+      current: completed,
+      total: segments.length,
+      cache: getCacheHitCount(cacheStats),
+      fresh: Number(cacheStats.newTranslations) || 0
     });
   }
+
+  const workerCount = Math.max(1, Math.min(concurrency, segments.length));
+  await Promise.all(Array.from({ length: workerCount }, () => translateNextSegment()));
   return result;
+}
+
+function getContiguousReadySegments(segments) {
+  const ready = [];
+  for (const segment of segments) {
+    if (!segment?.text) break;
+    ready.push(segment);
+  }
+  return ready;
+}
+
+function notifyPartialTimeline(tabId, segments, requestId, settings, translatedCount) {
+  notifyTab(tabId, {
+    type: "PARTIAL_TIMELINE",
+    timeline: {
+      segments,
+      partial: true
+    },
+    requestId,
+    translatedCount,
+    minPlayableSegments: PARTIAL_PLAYBACK_MIN_SEGMENTS,
+    translator: getTranslatorStatus(settings)
+  });
 }
 
 function throwIfCanceled(job) {
@@ -476,18 +649,37 @@ async function pollHelperProgress(tabId, progressEndpoint, requestId, job) {
       if (response.ok) {
         const data = await response.json();
         if (data?.ok && typeof data.progress === "number") {
-          notifyPrepareProgress(tabId, data.text || "生成中", {
+          notifyPrepareProgress(tabId, compactHelperStatus(data), {
             phase: data.phase || "preparing",
             progress: data.progress,
-            requestId
+            requestId,
+            statusKind: "recognize",
+            recognizer: job?.recognizer || null
           });
         }
       }
     } catch {
       if (job?.done || job?.canceled || job?.controller?.signal?.aborted) return;
     }
-    await delay(500);
+  await delay(500);
   }
+}
+
+function compactHelperStatus(data) {
+  const phase = String(data?.phase || "");
+  const text = String(data?.text || "");
+  if (phase === "transcribing") return "正在识别";
+  if (phase === "converting") return "抽取音频";
+  if (phase === "downloaded") return "处理音频";
+  if (phase === "downloading") {
+    const percent = text.match(/(\d+)\s*%/)?.[1];
+    return percent ? `下载 ${percent}%` : "下载中";
+  }
+  if (phase === "metadata") return "读取格式";
+  if (phase === "loading_model") return "加载模型";
+  if (phase === "starting") return "读取信息";
+  if (phase === "ready") return "识别完成";
+  return text.replace(/^下载完成，?/, "").replace(/^正在/, "").replace(/\.{3}$/, "").slice(0, 8) || "生成中";
 }
 
 function delay(ms) {
@@ -496,9 +688,7 @@ function delay(ms) {
 
 async function buildTimelineCacheKey(url, prepared, segments, settings) {
   const targetLanguage = normalizeTargetLanguage(settings.targetLanguage);
-  const translatorScope = settings.translatorType === "api"
-    ? `api:${settings.apiEndpoint || ""}:${targetLanguage}`
-    : `publicGoogle:${targetLanguage}`;
+  const translatorScope = getTranslatorCacheScope(settings, targetLanguage);
   const signature = JSON.stringify({
     version: 1,
     video: normalizePrepareUrl(url),
@@ -547,10 +737,22 @@ async function sha256(text) {
 async function translateTexts(texts, settings, options = {}) {
   if (!texts.length) return [];
   const targetLanguage = normalizeTargetLanguage(settings.targetLanguage);
+  if (settings.translatorType === "deepseek") {
+    if (!settings.deepSeekApiKey) {
+      throw new Error("DeepSeek translator is selected, but no API key is configured.");
+    }
+    return translateManyWithCache(
+      texts,
+      getTranslatorCacheScope(settings, targetLanguage),
+      (text) => translateOneWithDeepSeek(text, settings, targetLanguage),
+      options
+    );
+  }
+
   if (settings.translatorType !== "api") {
     return translateManyWithCache(
       texts,
-      `publicGoogle:en:${targetLanguage}`,
+      getTranslatorCacheScope(settings, targetLanguage),
       (text) => translateOneWithPublicGoogle(text, targetLanguage),
       options
     );
@@ -568,6 +770,74 @@ async function translateTexts(texts, settings, options = {}) {
   );
 }
 
+function getTranslatorCacheScope(settings, targetLanguage) {
+  if (settings.translatorType === "api") {
+    return `api:${settings.apiEndpoint || ""}:en:${targetLanguage}`;
+  }
+  if (settings.translatorType === "deepseek") {
+    return `deepseek:${settings.deepSeekModel || "deepseek-chat"}:en:${targetLanguage}`;
+  }
+  return `publicGoogle:en:${targetLanguage}`;
+}
+
+function getTranslatorLabel(settings) {
+  if (settings.translatorType === "api") return "Custom";
+  if (settings.translatorType === "deepseek") {
+    return `DeepSeek ${settings.deepSeekModel || "deepseek-chat"}`;
+  }
+  return "Google";
+}
+
+function getTranslatorStatus(settings) {
+  if (settings.translatorType === "deepseek") {
+    return {
+      type: "deepseek",
+      label: "",
+      model: settings.deepSeekModel || "deepseek-chat"
+    };
+  }
+  if (settings.translatorType === "api") {
+    return {
+      type: "custom",
+      label: "API",
+      model: ""
+    };
+  }
+  return {
+    type: "google",
+    label: "",
+    model: ""
+  };
+}
+
+function getRecognizerStatus(settings) {
+  if (settings.asrProvider === "volcengine") {
+    return {
+      type: "volcengine",
+      label: "",
+      model: settings.asrModel || ""
+    };
+  }
+  return {
+    type: "custom",
+    label: "",
+    model: settings.asrModel || ""
+  };
+}
+
+function getCacheHitCount(stats) {
+  return (Number(stats.memoryHits) || 0) + (Number(stats.persistentHits) || 0);
+}
+
+function getTranslationConcurrency(settings) {
+  const type = settings.translatorType === "deepseek"
+    ? "deepseek"
+    : settings.translatorType === "api"
+      ? "api"
+      : "publicGoogle";
+  return TRANSLATION_CONCURRENCY[type] || 4;
+}
+
 async function translateManyWithCache(texts, cacheScope, translateOne, options = {}) {
   const results = [];
   for (const text of texts) {
@@ -578,20 +848,41 @@ async function translateManyWithCache(texts, cacheScope, translateOne, options =
     }
 
     const cacheKey = `${cacheScope}:${normalized}`;
+    if (!options.force && translationCache.has(cacheKey)) {
+      incrementCacheStat(options.cacheStats, "memoryHits");
+    }
     if (options.force || !translationCache.has(cacheKey)) {
       const persistentKey = `${TRANSLATION_CACHE_PREFIX}${await sha256(cacheKey)}`;
       const cached = options.force ? "" : await loadCachedTranslation(persistentKey);
       if (cached) {
         translationCache.set(cacheKey, cached);
+        incrementCacheStat(options.cacheStats, "persistentHits");
       } else {
-        const translated = normalizeText(await translateOne(normalized));
+        const translated = await translateOneWithInFlight(cacheKey, normalized, translateOne);
         translationCache.set(cacheKey, translated);
         await saveCachedTranslation(persistentKey, translated);
+        incrementCacheStat(options.cacheStats, "newTranslations");
       }
     }
     results.push(translationCache.get(cacheKey) || "");
   }
   return results;
+}
+
+async function translateOneWithInFlight(cacheKey, normalized, translateOne) {
+  if (!translationInFlight.has(cacheKey)) {
+    const task = Promise.resolve()
+      .then(() => translateOne(normalized))
+      .then((text) => normalizeText(text))
+      .finally(() => translationInFlight.delete(cacheKey));
+    translationInFlight.set(cacheKey, task);
+  }
+  return translationInFlight.get(cacheKey);
+}
+
+function incrementCacheStat(stats, key) {
+  if (!stats) return;
+  stats[key] = (Number(stats[key]) || 0) + 1;
 }
 
 async function loadCachedTranslation(cacheKey) {
@@ -685,6 +976,55 @@ async function translateOneWithApi(text, settings, targetLanguage) {
 
   const data = await response.json();
   return pickTranslation(data);
+}
+
+async function translateOneWithDeepSeek(text, settings, targetLanguage) {
+  const model = settings.deepSeekModel === "deepseek-reasoner"
+    ? "deepseek-reasoner"
+    : "deepseek-chat";
+  const response = await fetch("https://api.deepseek.com/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${settings.deepSeekApiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You are a translation engine.",
+            "Translate English video transcript text into the target language.",
+            "Return only the translation, with no explanation, quotes, labels, or markdown."
+          ].join(" ")
+        },
+        {
+          role: "user",
+          content: `Target language: ${toLanguageLabel(targetLanguage)}\nText: ${text}`
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`DeepSeek translation failed with HTTP ${response.status}: ${errorText.slice(0, 300)}`);
+  }
+
+  const data = await response.json();
+  return pickTranslation(data);
+}
+
+function toLanguageLabel(language) {
+  return {
+    "zh-CN": "Simplified Chinese",
+    "zh-TW": "Traditional Chinese",
+    "ja-JP": "Japanese",
+    "ko-KR": "Korean",
+    "en-US": "English"
+  }[normalizeTargetLanguage(language)] || "Simplified Chinese";
 }
 
 function flattenPublicGoogleParts(parts) {

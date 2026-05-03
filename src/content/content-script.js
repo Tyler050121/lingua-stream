@@ -119,9 +119,29 @@
       }
 
       if (message?.type === "PREPARE_STATUS" && controlButton) {
-        controlButton.setStatus(message.text || "");
+        controlButton.setStatus(message.text || "", message);
         if (typeof message.progress === "number") {
           controlButton.setProgress(message.progress, message.phase || "preparing");
+        }
+      }
+
+      if (message?.type === "PARTIAL_TIMELINE") {
+        if (
+          typeof message.requestId === "number" &&
+          (
+            canceledPrepareRequests.has(message.requestId) ||
+            (activePrepareRequestId && activePrepareRequestId !== message.requestId)
+          )
+        ) {
+          return;
+        }
+        preparedPlayer.load(message.timeline, { preservePlayback: true });
+        if (controlButton) {
+          controlButton.show();
+          controlButton.setPartialReady(
+            message.translatedCount || message.timeline?.segments?.length || 0,
+            message.minPlayableSegments || 20
+          );
         }
       }
 
@@ -136,10 +156,11 @@
           return;
         }
         activePrepareRequestId = 0;
-        preparedPlayer.load(message.timeline);
+        const wasPlaying = preparedPlayer.isEnabled();
+        preparedPlayer.load(message.timeline, { preservePlayback: wasPlaying });
         if (controlButton) {
           controlButton.show();
-          controlButton.setActive(false);
+          controlButton.setActive(preparedPlayer.isEnabled());
           controlButton.setPrepared(true, message.timeline?.segments?.length || 0);
           controlButton.setProgress(100, "ready");
           controlButton.setStatus(`声译就绪 ${message.timeline?.segments?.length || 0} 段`);
@@ -204,22 +225,26 @@
       this.utteranceTimer = null;
     }
 
-    load(timeline) {
-      this.stopSpeech();
-      this.enabled = false;
+    load(timeline, options = {}) {
+      const preservePlayback = Boolean(options.preservePlayback);
+      const wasEnabled = this.enabled && preservePlayback;
+      const spokenById = new Map(this.segments.map((segment) => [segment.id, segment.spoken]));
+      if (!preservePlayback) this.stopSpeech();
+      this.enabled = wasEnabled;
       this.timeline = timeline || null;
       this.segments = (timeline?.segments || [])
         .map((segment, index) => ({
           ...segment,
           index,
-          spoken: false
+          spoken: spokenById.get(segment.id) || false
         }))
         .sort((a, b) => a.start - b.start);
       this.segments.forEach((segment, index) => {
         segment.nextStart = this.segments[index + 1]?.start ?? null;
       });
-      this.lastTime = 0;
+      if (!preservePlayback) this.lastTime = 0;
       this.attachVideo();
+      if (this.enabled) this.duckVolume();
     }
 
     clear() {
@@ -232,6 +257,10 @@
 
     hasTimeline() {
       return this.segments.length > 0;
+    }
+
+    isEnabled() {
+      return this.enabled;
     }
 
     setEnabled(enabled) {

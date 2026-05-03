@@ -25,6 +25,11 @@
       <div class="panel-stage">
         <section id="tab-basic" class="tab-panel is-active" role="tabpanel" data-tab-panel="basic">
           <section class="section">
+            <label class="field" id="asrEndpointField">
+              <span>Backend URL <b id="asrBaseUrlRequired" class="required">*</b></span>
+              <input id="asrEndpoint" type="url" placeholder="http://127.0.0.1:8787">
+            </label>
+
             <label class="field">
               <span>Target Language <b class="required">*</b></span>
               <select id="targetLanguage">
@@ -55,7 +60,17 @@
 
             <label class="field" id="ttsApiKeyField">
               <span>API Key</span>
-              <input id="ttsApiKey" type="password" placeholder="sk-...">
+              <div class="password-shell">
+                <input id="ttsApiKey" type="password" placeholder="sk-...">
+                <button class="password-toggle" type="button" data-password-toggle="ttsApiKey" aria-label="Show API Key" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path class="eye-open" d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                    <path class="eye-open" d="M12 9.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6Z"></path>
+                    <path class="eye-closed" d="M3.5 5.5 20.5 18.5"></path>
+                    <path class="eye-closed" d="M10.7 10.4a2.8 2.8 0 0 0 3.5 3.5"></path>
+                  </svg>
+                </button>
+              </div>
             </label>
 
             <label class="field" id="ttsModelField">
@@ -92,18 +107,55 @@
               <span>Provider <b class="required">*</b></span>
               <select id="asrProvider">
                 <option value="custom">Custom</option>
-                <option value="openai">OpenAI</option>
+                <option value="volcengine">Volcengine</option>
               </select>
             </label>
 
-            <label class="field" id="asrEndpointField">
-              <span>BaseURL <b id="asrBaseUrlRequired" class="required">*</b></span>
-              <input id="asrEndpoint" type="url" placeholder="http://127.0.0.1:8787">
+            <label class="field" id="asrCustomBaseUrlField">
+              <span>BaseURL <b class="required">*</b></span>
+              <input id="asrCustomBaseUrl" type="url" placeholder="http://127.0.0.1:8787">
             </label>
 
-            <label class="field" id="asrApiKeyField">
-              <span>API Key <b id="asrApiKeyRequired" class="required" hidden>*</b></span>
-              <input id="asrApiKey" type="password" placeholder="sk-...">
+            <label class="field" id="asrCustomApiKeyField">
+              <span>API Key</span>
+              <div class="password-shell">
+                <input id="asrCustomApiKey" type="password" placeholder="API Key">
+                <button class="password-toggle" type="button" data-password-toggle="asrCustomApiKey" aria-label="Show API Key" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path class="eye-open" d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                    <path class="eye-open" d="M12 9.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6Z"></path>
+                    <path class="eye-closed" d="M3.5 5.5 20.5 18.5"></path>
+                    <path class="eye-closed" d="M10.7 10.4a2.8 2.8 0 0 0 3.5 3.5"></path>
+                  </svg>
+                </button>
+              </div>
+            </label>
+
+            <label class="field" id="asrVolcengineModeField" hidden>
+              <span>Mode <b class="required">*</b></span>
+              <select id="asrVolcengineMode">
+                <option value="turbo">Flash / Turbo</option>
+              </select>
+            </label>
+
+            <label class="field" id="asrVolcengineAppIdField" hidden>
+              <span>APP ID <b class="required">*</b></span>
+              <input id="asrVolcengineAppId" type="text" placeholder="APP ID">
+            </label>
+
+            <label class="field" id="asrVolcengineAccessTokenField" hidden>
+              <span>Access Token <b class="required">*</b></span>
+              <div class="password-shell">
+                <input id="asrVolcengineAccessToken" type="password" placeholder="Access Token">
+                <button class="password-toggle" type="button" data-password-toggle="asrVolcengineAccessToken" aria-label="Show Access Token" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path class="eye-open" d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                    <path class="eye-open" d="M12 9.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6Z"></path>
+                    <path class="eye-closed" d="M3.5 5.5 20.5 18.5"></path>
+                    <path class="eye-closed" d="M10.7 10.4a2.8 2.8 0 0 0 3.5 3.5"></path>
+                  </svg>
+                </button>
+              </div>
             </label>
 
             <label class="field" id="asrModelField">
@@ -119,6 +171,7 @@
               <span>Provider <b class="required">*</b></span>
               <select id="translatorType">
                 <option value="publicGoogle">Google</option>
+                <option value="deepseek">DeepSeek</option>
                 <option value="api">Custom</option>
               </select>
             </label>
@@ -130,7 +183,40 @@
 
             <label class="field" id="apiKeyField">
               <span>API Key</span>
-              <input id="apiKey" type="password" placeholder="sk-...">
+              <div class="password-shell">
+                <input id="apiKey" type="password" placeholder="sk-...">
+                <button class="password-toggle" type="button" data-password-toggle="apiKey" aria-label="Show API Key" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path class="eye-open" d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                    <path class="eye-open" d="M12 9.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6Z"></path>
+                    <path class="eye-closed" d="M3.5 5.5 20.5 18.5"></path>
+                    <path class="eye-closed" d="M10.7 10.4a2.8 2.8 0 0 0 3.5 3.5"></path>
+                  </svg>
+                </button>
+              </div>
+            </label>
+
+            <label class="field" id="deepSeekApiKeyField" hidden>
+              <span>API Key <b class="required">*</b></span>
+              <div class="password-shell">
+                <input id="deepSeekApiKey" type="password" placeholder="sk-...">
+                <button class="password-toggle" type="button" data-password-toggle="deepSeekApiKey" aria-label="Show API Key" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path class="eye-open" d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                    <path class="eye-open" d="M12 9.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6Z"></path>
+                    <path class="eye-closed" d="M3.5 5.5 20.5 18.5"></path>
+                    <path class="eye-closed" d="M10.7 10.4a2.8 2.8 0 0 0 3.5 3.5"></path>
+                  </svg>
+                </button>
+              </div>
+            </label>
+
+            <label class="field" id="deepSeekModelField" hidden>
+              <span>Model <b class="required">*</b></span>
+              <select id="deepSeekModel">
+                <option value="deepseek-chat">deepseek-chat</option>
+                <option value="deepseek-reasoner">deepseek-reasoner</option>
+              </select>
             </label>
           </section>
         </section>
