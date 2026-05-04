@@ -15,6 +15,12 @@ const DEFAULT_SETTINGS = {
   ttsBaseUrl: "",
   ttsApiKey: "",
   ttsModel: "",
+  ttsVolcengineAppId: "",
+  ttsVolcengineAccessToken: "",
+  ttsVolcengineCluster: "volcano_tts",
+  ttsVolcengineVoiceType: "",
+  ttsGoogleApiKey: "",
+  ttsGoogleVoiceName: "",
   ttsVolume: 1,
   ttsVoiceURI: "",
   translatorType: "publicGoogle",
@@ -22,7 +28,7 @@ const DEFAULT_SETTINGS = {
   apiKey: "",
   deepSeekApiKey: "",
   deepSeekModel: "deepseek-chat",
-  settingsVersion: 15
+  settingsVersion: 16
 };
 
 const SUPPORTED_TARGET_LANGUAGES = new Set(["zh-CN", "zh-TW", "ja-JP", "ko-KR", "en-US"]);
@@ -31,8 +37,10 @@ const preparePorts = new Map();
 const prepareSessions = new Map();
 const translationCache = new Map();
 const translationInFlight = new Map();
+const speechCache = new Map();
 const TIMELINE_CACHE_PREFIX = "linguastream:timeline:";
 const TRANSLATION_CACHE_PREFIX = "linguastream:translation:";
+const MAX_SPEECH_CACHE_ITEMS = 120;
 const RUNTIME_CONFIG = globalThis.LinguaStreamRuntimeConfig || {};
 const TRANSLATION_CONCURRENCY = {
   publicGoogle: 6,
@@ -96,6 +104,14 @@ async function handleMessage(message, sender = {}) {
     return { ok: true, translations };
   }
 
+  if (message.type === "SYNTHESIZE_SPEECH") {
+    const settings = await getSettings();
+    return synthesizeSpeech(message.text || "", settings, {
+      rate: Number(message.rate) || 1,
+      targetLanguage: message.targetLanguage
+    });
+  }
+
   if (message.type === "PREPARE_VIDEO") {
     return prepareVideo(
       resolveTabId(sender, message),
@@ -140,8 +156,11 @@ async function getSettings() {
   if (!["custom", "volcengine"].includes(settings.asrProvider)) {
     settings.asrProvider = DEFAULT_SETTINGS.asrProvider;
   }
-  if (!["browser", "custom"].includes(settings.ttsProvider)) {
+  if (!["browser", "custom", "volcengine", "googleCloud"].includes(settings.ttsProvider)) {
     settings.ttsProvider = DEFAULT_SETTINGS.ttsProvider;
+  }
+  if (!settings.ttsVolcengineCluster) {
+    settings.ttsVolcengineCluster = DEFAULT_SETTINGS.ttsVolcengineCluster;
   }
   if (!settings.asrEndpoint) {
     settings.asrEndpoint = DEFAULT_SETTINGS.asrEndpoint;
@@ -180,10 +199,24 @@ function sanitizeSettings(settings) {
   if (typeof settings.ttsVolume === "number") {
     clean.ttsVolume = Math.min(1, Math.max(0, settings.ttsVolume));
   }
-  clean.ttsProvider = settings.ttsProvider === "custom" ? "custom" : "browser";
+  clean.ttsProvider = normalizeTtsProvider(settings.ttsProvider);
   if (typeof settings.ttsBaseUrl === "string") clean.ttsBaseUrl = settings.ttsBaseUrl.trim();
   if (typeof settings.ttsApiKey === "string") clean.ttsApiKey = settings.ttsApiKey.trim();
   if (typeof settings.ttsModel === "string") clean.ttsModel = settings.ttsModel.trim();
+  if (typeof settings.ttsVolcengineAppId === "string") {
+    clean.ttsVolcengineAppId = settings.ttsVolcengineAppId.trim();
+  }
+  if (typeof settings.ttsVolcengineAccessToken === "string") {
+    clean.ttsVolcengineAccessToken = settings.ttsVolcengineAccessToken.trim();
+  }
+  if (typeof settings.ttsVolcengineCluster === "string") {
+    clean.ttsVolcengineCluster = settings.ttsVolcengineCluster.trim() || DEFAULT_SETTINGS.ttsVolcengineCluster;
+  }
+  if (typeof settings.ttsVolcengineVoiceType === "string") {
+    clean.ttsVolcengineVoiceType = settings.ttsVolcengineVoiceType.trim();
+  }
+  if (typeof settings.ttsGoogleApiKey === "string") clean.ttsGoogleApiKey = settings.ttsGoogleApiKey.trim();
+  if (typeof settings.ttsGoogleVoiceName === "string") clean.ttsGoogleVoiceName = settings.ttsGoogleVoiceName.trim();
   if (typeof settings.ttsVoiceURI === "string") clean.ttsVoiceURI = settings.ttsVoiceURI;
   if (typeof settings.asrEndpoint === "string") {
     clean.asrEndpoint = settings.asrEndpoint.trim() || DEFAULT_SETTINGS.asrEndpoint;
@@ -339,7 +372,7 @@ async function runPrepareVideo(tabId, url, settings, force = false, requestId = 
   throwIfCanceled(job);
   const segments = Array.isArray(prepared.segments) ? prepared.segments : [];
   if (!segments.length) {
-    return { ok: false, error: "本地 helper 没有识别到可用语音段落" };
+    return { ok: false, error: "后端没有识别到可用语音段落" };
   }
 
   const translatorLabel = getTranslatorLabel(settings);
@@ -459,8 +492,8 @@ async function formatPrepareError(response) {
     return "未识别到语音段落";
   }
   return detail
-    ? `Prepare helper failed with HTTP ${response.status}: ${detail}`
-    : `Prepare helper failed with HTTP ${response.status}`;
+    ? `Backend prepare failed with HTTP ${response.status}: ${detail}`
+    : `Backend prepare failed with HTTP ${response.status}`;
 }
 
 async function translatePreparedSegments(tabId, segments, settings, force = false, requestId = 0, job = null) {
@@ -823,6 +856,168 @@ function getRecognizerStatus(settings) {
     label: "",
     model: settings.asrModel || ""
   };
+}
+
+function normalizeTtsProvider(provider) {
+  if (provider === "custom" || provider === "volcengine" || provider === "googleCloud") {
+    return provider;
+  }
+  return "browser";
+}
+
+async function synthesizeSpeech(text, settings, options = {}) {
+  const normalizedText = normalizeText(text);
+  const provider = normalizeTtsProvider(settings.ttsProvider);
+  if (!normalizedText) return { ok: false, error: "No speech text." };
+  if (provider === "browser" || provider === "custom") {
+    return { ok: false, error: "Selected TTS provider does not use extension-side synthesis." };
+  }
+
+  const targetLanguage = normalizeTargetLanguage(options.targetLanguage || settings.targetLanguage);
+  const rate = clampNumber(options.rate, 0.25, 3, 1);
+  const cacheKey = [
+    provider,
+    targetLanguage,
+    rate.toFixed(2),
+    settings.ttsVolcengineCluster || "",
+    settings.ttsVolcengineVoiceType || "",
+    settings.ttsGoogleVoiceName || "",
+    normalizedText
+  ].join("\n");
+  if (speechCache.has(cacheKey)) {
+    return { ok: true, cached: true, ...speechCache.get(cacheKey) };
+  }
+
+  const result = provider === "volcengine"
+    ? await synthesizeWithVolcengine(normalizedText, settings, targetLanguage, rate)
+    : await synthesizeWithGoogleCloud(normalizedText, settings, targetLanguage, rate);
+  if (result.ok) {
+    rememberSpeech(cacheKey, {
+      audioContent: result.audioContent,
+      mimeType: result.mimeType
+    });
+  }
+  return result;
+}
+
+async function synthesizeWithVolcengine(text, settings, targetLanguage, rate) {
+  const appId = String(settings.ttsVolcengineAppId || "").trim();
+  const accessToken = String(settings.ttsVolcengineAccessToken || "").trim();
+  const cluster = String(settings.ttsVolcengineCluster || DEFAULT_SETTINGS.ttsVolcengineCluster).trim();
+  const voiceType = String(settings.ttsVolcengineVoiceType || "").trim();
+  if (!appId || !accessToken || !cluster || !voiceType) {
+    throw new Error("Volcengine TTS requires APP ID, Access Token, Cluster, and Voice Type.");
+  }
+
+  const response = await fetch("https://openspeech.bytedance.com/api/v1/tts", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer;${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      app: {
+        appid: appId,
+        token: accessToken,
+        cluster
+      },
+      user: {
+        uid: "linguastream-extension"
+      },
+      audio: {
+        voice_type: voiceType,
+        encoding: "mp3",
+        speed_ratio: clampNumber(rate, 0.2, 3, 1),
+        volume_ratio: 1,
+        pitch_ratio: 1
+      },
+      request: {
+        reqid: crypto.randomUUID(),
+        text,
+        text_type: "plain",
+        operation: "query"
+      }
+    })
+  });
+
+  const payload = await readJsonResponse(response, "Volcengine TTS");
+  if (payload?.code && payload.code !== 3000) {
+    throw new Error(`Volcengine TTS failed with code ${payload.code}: ${payload.message || payload.msg || ""}`);
+  }
+  const audioContent = payload?.data || payload?.audio || payload?.audioContent || "";
+  if (!audioContent) {
+    throw new Error(`Volcengine TTS returned no audio: ${JSON.stringify(payload).slice(0, 300)}`);
+  }
+  return { ok: true, provider: "volcengine", audioContent, mimeType: "audio/mpeg" };
+}
+
+async function synthesizeWithGoogleCloud(text, settings, targetLanguage, rate) {
+  const apiKey = String(settings.ttsGoogleApiKey || "").trim();
+  if (!apiKey) throw new Error("Google Cloud TTS requires an API key.");
+  const voiceName = String(settings.ttsGoogleVoiceName || "").trim();
+  const voice = {
+    languageCode: getGoogleTtsLanguageCode(targetLanguage)
+  };
+  if (voiceName) voice.name = voiceName;
+
+  const response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      input: { text },
+      voice,
+      audioConfig: {
+        audioEncoding: "MP3",
+        speakingRate: clampNumber(rate, 0.25, 2, 1)
+      }
+    })
+  });
+
+  const payload = await readJsonResponse(response, "Google Cloud TTS");
+  if (!payload?.audioContent) {
+    throw new Error(`Google Cloud TTS returned no audio: ${JSON.stringify(payload).slice(0, 300)}`);
+  }
+  return { ok: true, provider: "googleCloud", audioContent: payload.audioContent, mimeType: "audio/mpeg" };
+}
+
+function getGoogleTtsLanguageCode(targetLanguage) {
+  const languageMap = {
+    "zh-CN": "cmn-CN",
+    "zh-TW": "cmn-TW"
+  };
+  return languageMap[targetLanguage] || targetLanguage;
+}
+
+async function readJsonResponse(response, label) {
+  const rawText = await response.text();
+  let payload = {};
+  try {
+    payload = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    payload = { raw: rawText };
+  }
+  if (!response.ok) {
+    const detail = payload?.error?.message || payload?.message || payload?.raw || JSON.stringify(payload);
+    throw new Error(`${label} failed with HTTP ${response.status}: ${detail}`);
+  }
+  return payload;
+}
+
+function rememberSpeech(key, value) {
+  speechCache.set(key, value);
+  while (speechCache.size > MAX_SPEECH_CACHE_ITEMS) {
+    const oldestKey = speechCache.keys().next().value;
+    speechCache.delete(oldestKey);
+  }
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? Math.min(max, Math.max(min, number))
+    : fallback;
 }
 
 function getCacheHitCount(stats) {

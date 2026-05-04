@@ -47,6 +47,12 @@
       ttsBaseUrl: "",
       ttsApiKey: "",
       ttsModel: "",
+      ttsVolcengineAppId: "",
+      ttsVolcengineAccessToken: "",
+      ttsVolcengineCluster: "volcano_tts",
+      ttsVolcengineVoiceType: "",
+      ttsGoogleApiKey: "",
+      ttsGoogleVoiceName: "",
       ttsVolume: 1,
       ttsVoiceURI: "",
       translatorType: "publicGoogle",
@@ -219,6 +225,7 @@
       this.timer = window.setInterval(() => this.tick(), 250);
       this.lastTime = 0;
       this.currentUtterance = null;
+      this.currentExternalSpeech = null;
       this.enabled = false;
       this.duckedVideo = null;
       this.originalVolume = null;
@@ -305,7 +312,10 @@
       if (this.currentUtterance && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
         this.currentUtterance = null;
       }
-      if (window.speechSynthesis.speaking || this.currentUtterance) return;
+      if (this.currentExternalSpeech?.audio?.ended) {
+        this.currentExternalSpeech = null;
+      }
+      if (this.isSpeaking()) return;
 
       for (const item of this.segments) {
         if (!item.spoken && item.end < now - 0.75) item.spoken = true;
@@ -323,6 +333,15 @@
     }
 
     speak(segment, currentTime) {
+      const provider = normalizeTtsProvider(settings?.ttsProvider);
+      if (provider === "volcengine" || provider === "googleCloud") {
+        this.speakWithProvider(segment, currentTime);
+        return;
+      }
+      this.speakWithBrowser(segment, currentTime);
+    }
+
+    speakWithBrowser(segment, currentTime) {
       if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) return;
       const text = segment.text;
       const timing = calculateSpeechTiming(segment, currentTime);
@@ -354,6 +373,74 @@
         this.utteranceTimer = null;
         this.currentUtterance = null;
       }, estimateSpeechTimeout(text, timing));
+    }
+
+    async speakWithProvider(segment, currentTime) {
+      const text = segment.text;
+      const timing = calculateSpeechTiming(segment, currentTime);
+      const token = crypto.randomUUID();
+      const speech = {
+        token,
+        pending: true,
+        audio: null
+      };
+      this.currentExternalSpeech = speech;
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      this.clearUtteranceTimer();
+      this.duckVolume();
+
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "SYNTHESIZE_SPEECH",
+          text,
+          rate: timing.rate,
+          targetLanguage: normalizeTargetLanguage(settings?.targetLanguage)
+        });
+        if (this.currentExternalSpeech?.token !== token) return;
+        if (!response?.ok || !response.audioContent) {
+          throw new Error(response?.error || "TTS provider returned no audio.");
+        }
+
+        const audio = new Audio(`data:${response.mimeType || "audio/mpeg"};base64,${response.audioContent}`);
+        audio.volume = typeof settings?.ttsVolume === "number"
+          ? clamp(settings.ttsVolume, 0, 1)
+          : 1;
+        audio.onended = () => this.clearExternalSpeech(token);
+        audio.onerror = () => this.clearExternalSpeech(token);
+        this.currentExternalSpeech = {
+          token,
+          pending: false,
+          audio
+        };
+        await audio.play();
+        this.utteranceTimer = window.setTimeout(() => {
+          if (this.currentExternalSpeech?.token !== token) return;
+          audio.pause();
+          this.clearExternalSpeech(token);
+        }, estimateSpeechTimeout(text, timing));
+      } catch (error) {
+        warn("Provider TTS failed; falling back to browser voice", error);
+        if (this.currentExternalSpeech?.token === token) {
+          this.currentExternalSpeech = null;
+        }
+        this.speakWithBrowser(segment, currentTime);
+      }
+    }
+
+    isSpeaking() {
+      const external = this.currentExternalSpeech;
+      if (external?.pending) return true;
+      if (external?.audio && !external.audio.paused && !external.audio.ended) return true;
+      return Boolean(
+        this.currentUtterance ||
+        (window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending))
+      );
+    }
+
+    clearExternalSpeech(token = "") {
+      if (token && this.currentExternalSpeech?.token !== token) return;
+      this.clearUtteranceTimer();
+      this.currentExternalSpeech = null;
     }
 
     clearUtteranceTimer() {
@@ -396,8 +483,13 @@
 
     stopSpeech() {
       if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      if (this.currentExternalSpeech?.audio) {
+        this.currentExternalSpeech.audio.pause();
+        this.currentExternalSpeech.audio.src = "";
+      }
       this.clearUtteranceTimer();
       this.currentUtterance = null;
+      this.currentExternalSpeech = null;
     }
   }
 
@@ -439,6 +531,13 @@
     return ["zh-CN", "zh-TW", "ja-JP", "ko-KR", "en-US"].includes(language)
       ? language
       : "zh-CN";
+  }
+
+  function normalizeTtsProvider(provider) {
+    if (provider === "volcengine" || provider === "googleCloud" || provider === "custom") {
+      return provider;
+    }
+    return "browser";
   }
 
   function pickVoiceForLanguage(voiceURI = "", targetLanguage = "zh-CN") {

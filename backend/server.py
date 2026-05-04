@@ -26,7 +26,15 @@ except ImportError:
     fcntl = None
 
 
-CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "helper.json"
+CONFIG_PATH = Path(
+    os.environ.get(
+        "LINGUASTREAM_BACKEND_CONFIG",
+        os.environ.get(
+            "LINGUASTREAM_HELPER_CONFIG",
+            str(Path(__file__).resolve().parent / "config" / "helper.json"),
+        ),
+    )
+)
 HELPER_CONFIG = {}
 try:
     HELPER_CONFIG = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
@@ -63,7 +71,7 @@ CACHE_ROOT = Path(
 )
 PROGRESS_ROOT = CACHE_ROOT / ".progress"
 
-app = FastAPI(title="LinguaStream Local ASR")
+app = FastAPI(title="LinguaStream Backend")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -112,7 +120,7 @@ def prepare_progress(job_id: str):
 def root():
     return {
         "ok": True,
-        "service": "LinguaStream local helper",
+        "service": "LinguaStream backend",
         "prepare_endpoint": "/prepare-youtube",
         "note": "Configure the extension popup endpoint as http://127.0.0.1:8787",
     }
@@ -228,7 +236,7 @@ def prepare_youtube(payload: PrepareYouTubeRequest):
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "The helper did not detect any usable speech segments. "
+                    "The backend did not detect any usable speech segments. "
                     "This can happen when the video has little speech, the downloaded format contains no usable audio, "
                     "or the selected ASR provider returned an empty result."
                 ),
@@ -854,4 +862,4 @@ def get_model(model_name: str):
 
 def log_event(kind: str, message: str):
     if VERBOSE:
-        print(f"[LinguaStream ASR] {kind}: {message}", flush=True)
+        print(f"[LinguaStream Backend] {kind}: {message}", flush=True)

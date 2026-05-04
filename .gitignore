@@ -34,10 +34,10 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Local helper cache / generated media
-tools/local-asr/cache/
-tools/local-asr/.venv/
-tools/local-asr/__pycache__/
+# Backend cache / generated media
+backend/cache/
+backend/.venv/
+backend/__pycache__/
 *.mp3
 *.mp4
 *.m4a
@@ -47,8 +47,9 @@ tools/local-asr/__pycache__/
 *.opus
 *.part
 
-# Generated images and scratch output
-tmp/
+# Generated images, video renders, and scratch output
+scratch/
+media/
 
 # Extension build artifacts
 dist/

@@ -49,8 +49,60 @@
               <span>Voice Provider <b class="required">*</b></span>
               <select id="ttsProvider">
                 <option value="browser">Browser</option>
+                <option value="volcengine">Volcengine</option>
+                <option value="googleCloud">Google Cloud</option>
                 <option value="custom">Custom</option>
               </select>
+            </label>
+
+            <label class="field" id="ttsVolcengineAppIdField" hidden>
+              <span>APP ID <b class="required">*</b></span>
+              <input id="ttsVolcengineAppId" type="text" placeholder="APP ID">
+            </label>
+
+            <label class="field" id="ttsVolcengineAccessTokenField" hidden>
+              <span>Access Token <b class="required">*</b></span>
+              <div class="password-shell">
+                <input id="ttsVolcengineAccessToken" type="password" placeholder="Access Token">
+                <button class="password-toggle" type="button" data-password-toggle="ttsVolcengineAccessToken" aria-label="Show Access Token" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path class="eye-open" d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                    <path class="eye-open" d="M12 9.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6Z"></path>
+                    <path class="eye-closed" d="M3.5 5.5 20.5 18.5"></path>
+                    <path class="eye-closed" d="M10.7 10.4a2.8 2.8 0 0 0 3.5 3.5"></path>
+                  </svg>
+                </button>
+              </div>
+            </label>
+
+            <label class="field" id="ttsVolcengineClusterField" hidden>
+              <span>Cluster <b class="required">*</b></span>
+              <input id="ttsVolcengineCluster" type="text" placeholder="volcano_tts">
+            </label>
+
+            <label class="field" id="ttsVolcengineVoiceTypeField" hidden>
+              <span>Voice Type <b class="required">*</b></span>
+              <input id="ttsVolcengineVoiceType" type="text" placeholder="BV700_streaming">
+            </label>
+
+            <label class="field" id="ttsGoogleApiKeyField" hidden>
+              <span>API Key <b class="required">*</b></span>
+              <div class="password-shell">
+                <input id="ttsGoogleApiKey" type="password" placeholder="AIza...">
+                <button class="password-toggle" type="button" data-password-toggle="ttsGoogleApiKey" aria-label="Show API Key" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path class="eye-open" d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                    <path class="eye-open" d="M12 9.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6Z"></path>
+                    <path class="eye-closed" d="M3.5 5.5 20.5 18.5"></path>
+                    <path class="eye-closed" d="M10.7 10.4a2.8 2.8 0 0 0 3.5 3.5"></path>
+                  </svg>
+                </button>
+              </div>
+            </label>
+
+            <label class="field" id="ttsGoogleVoiceNameField" hidden>
+              <span>Voice Name</span>
+              <input id="ttsGoogleVoiceName" type="text" placeholder="Auto, e.g. cmn-CN-Wavenet-A">
             </label>
 
             <label class="field" id="ttsBaseUrlField">

@@ -43,9 +43,9 @@
       ],
       "js": [
         "config/runtime.js",
-        "src/content/namespace.js",
-        "src/content/control-button.js",
-        "src/content/content-script.js"
+        "content/namespace.js",
+        "content/control-button.js",
+        "content/content-script.js"
       ],
       "run_at": "document_idle"
     }
