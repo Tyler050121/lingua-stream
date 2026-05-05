@@ -18,9 +18,7 @@ const DEFAULT_SETTINGS = {
   ttsVolcengineAppId: "",
   ttsVolcengineAccessToken: "",
   ttsVolcengineCluster: "volcano_tts",
-  ttsVolcengineVoiceType: "",
-  ttsGoogleApiKey: "",
-  ttsGoogleVoiceName: "",
+  ttsVolcengineVoiceType: "BV700_V2_streaming",
   ttsVolume: 1,
   ttsVoiceURI: "",
   translatorType: "publicGoogle",
@@ -28,7 +26,7 @@ const DEFAULT_SETTINGS = {
   apiKey: "",
   deepSeekApiKey: "",
   deepSeekModel: "deepseek-chat",
-  settingsVersion: 16
+  settingsVersion: 18
 };
 
 const SUPPORTED_TARGET_LANGUAGES = new Set(["zh-CN", "zh-TW", "ja-JP", "ko-KR", "en-US"]);
@@ -156,11 +154,14 @@ async function getSettings() {
   if (!["custom", "volcengine"].includes(settings.asrProvider)) {
     settings.asrProvider = DEFAULT_SETTINGS.asrProvider;
   }
-  if (!["browser", "custom", "volcengine", "googleCloud"].includes(settings.ttsProvider)) {
+  if (!["browser", "custom", "volcengine"].includes(settings.ttsProvider)) {
     settings.ttsProvider = DEFAULT_SETTINGS.ttsProvider;
   }
   if (!settings.ttsVolcengineCluster) {
     settings.ttsVolcengineCluster = DEFAULT_SETTINGS.ttsVolcengineCluster;
+  }
+  if (!settings.ttsVolcengineVoiceType) {
+    settings.ttsVolcengineVoiceType = DEFAULT_SETTINGS.ttsVolcengineVoiceType;
   }
   if (!settings.asrEndpoint) {
     settings.asrEndpoint = DEFAULT_SETTINGS.asrEndpoint;
@@ -175,11 +176,13 @@ async function getSettings() {
     settings.deepSeekModel = DEFAULT_SETTINGS.deepSeekModel;
   }
   delete settings.enabled;
+  delete settings.ttsGoogleApiKey;
+  delete settings.ttsGoogleVoiceName;
 
   if (settings.settingsVersion !== DEFAULT_SETTINGS.settingsVersion) {
     settings.settingsVersion = DEFAULT_SETTINGS.settingsVersion;
     await chrome.storage.local.set(settings);
-    await chrome.storage.local.remove("enabled");
+    await chrome.storage.local.remove(["enabled", "ttsGoogleApiKey", "ttsGoogleVoiceName"]);
   }
 
   return settings;
@@ -213,10 +216,8 @@ function sanitizeSettings(settings) {
     clean.ttsVolcengineCluster = settings.ttsVolcengineCluster.trim() || DEFAULT_SETTINGS.ttsVolcengineCluster;
   }
   if (typeof settings.ttsVolcengineVoiceType === "string") {
-    clean.ttsVolcengineVoiceType = settings.ttsVolcengineVoiceType.trim();
+    clean.ttsVolcengineVoiceType = settings.ttsVolcengineVoiceType.trim() || DEFAULT_SETTINGS.ttsVolcengineVoiceType;
   }
-  if (typeof settings.ttsGoogleApiKey === "string") clean.ttsGoogleApiKey = settings.ttsGoogleApiKey.trim();
-  if (typeof settings.ttsGoogleVoiceName === "string") clean.ttsGoogleVoiceName = settings.ttsGoogleVoiceName.trim();
   if (typeof settings.ttsVoiceURI === "string") clean.ttsVoiceURI = settings.ttsVoiceURI;
   if (typeof settings.asrEndpoint === "string") {
     clean.asrEndpoint = settings.asrEndpoint.trim() || DEFAULT_SETTINGS.asrEndpoint;
@@ -601,12 +602,32 @@ function normalizeText(text) {
 function normalizePrepareUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
-    const videoId = url.searchParams.get("v");
-    if (videoId) return `youtube:${videoId}`;
+    if (url.hostname.includes("youtube.com")) {
+      const videoId = url.searchParams.get("v");
+      if (videoId) return `youtube:${videoId}`;
+    }
+    if (url.hostname.includes("youtu.be")) {
+      const videoId = url.pathname.split("/").filter(Boolean)[0];
+      if (videoId) return `youtube:${videoId}`;
+    }
+    const bilibiliId = getBilibiliVideoId(url);
+    if (bilibiliId) {
+      const part = url.searchParams.get("p") || "";
+      return `bilibili:${bilibiliId}${part ? `:${part}` : ""}`;
+    }
     return `${url.origin}${url.pathname}`;
   } catch {
     return String(rawUrl || "");
   }
+}
+
+function getBilibiliVideoId(url) {
+  if (url.hostname.includes("b23.tv")) {
+    return url.pathname.split("/").filter(Boolean)[0] || "";
+  }
+  if (!url.hostname.includes("bilibili.com")) return "";
+  const match = url.pathname.match(/\/(?:video|bangumi\/play)\/([^/?#]+)/);
+  return match?.[1] || "";
 }
 
 function notifyTab(tabId, message) {
@@ -644,11 +665,12 @@ function buildPrepareEndpoint(asrEndpoint) {
     normalizedPath === "/transcribe" ||
     normalizedPath === "/transform" ||
     normalizedPath === "/translate" ||
-    normalizedPath === "/prepare-youtube"
+    normalizedPath === "/prepare-youtube" ||
+    normalizedPath === "/prepare-video"
   ) {
-    url.pathname = "/prepare-youtube";
+    url.pathname = "/prepare-video";
   } else {
-    url.pathname = `${normalizedPath}/prepare-youtube`;
+    url.pathname = `${normalizedPath}/prepare-video`;
   }
   url.search = "";
   url.hash = "";
@@ -859,7 +881,7 @@ function getRecognizerStatus(settings) {
 }
 
 function normalizeTtsProvider(provider) {
-  if (provider === "custom" || provider === "volcengine" || provider === "googleCloud") {
+  if (provider === "custom" || provider === "volcengine") {
     return provider;
   }
   return "browser";
@@ -881,16 +903,13 @@ async function synthesizeSpeech(text, settings, options = {}) {
     rate.toFixed(2),
     settings.ttsVolcengineCluster || "",
     settings.ttsVolcengineVoiceType || "",
-    settings.ttsGoogleVoiceName || "",
     normalizedText
   ].join("\n");
   if (speechCache.has(cacheKey)) {
     return { ok: true, cached: true, ...speechCache.get(cacheKey) };
   }
 
-  const result = provider === "volcengine"
-    ? await synthesizeWithVolcengine(normalizedText, settings, targetLanguage, rate)
-    : await synthesizeWithGoogleCloud(normalizedText, settings, targetLanguage, rate);
+  const result = await synthesizeWithVolcengine(normalizedText, settings, targetLanguage, rate);
   if (result.ok) {
     rememberSpeech(cacheKey, {
       audioContent: result.audioContent,
@@ -949,45 +968,6 @@ async function synthesizeWithVolcengine(text, settings, targetLanguage, rate) {
     throw new Error(`Volcengine TTS returned no audio: ${JSON.stringify(payload).slice(0, 300)}`);
   }
   return { ok: true, provider: "volcengine", audioContent, mimeType: "audio/mpeg" };
-}
-
-async function synthesizeWithGoogleCloud(text, settings, targetLanguage, rate) {
-  const apiKey = String(settings.ttsGoogleApiKey || "").trim();
-  if (!apiKey) throw new Error("Google Cloud TTS requires an API key.");
-  const voiceName = String(settings.ttsGoogleVoiceName || "").trim();
-  const voice = {
-    languageCode: getGoogleTtsLanguageCode(targetLanguage)
-  };
-  if (voiceName) voice.name = voiceName;
-
-  const response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(apiKey)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      input: { text },
-      voice,
-      audioConfig: {
-        audioEncoding: "MP3",
-        speakingRate: clampNumber(rate, 0.25, 2, 1)
-      }
-    })
-  });
-
-  const payload = await readJsonResponse(response, "Google Cloud TTS");
-  if (!payload?.audioContent) {
-    throw new Error(`Google Cloud TTS returned no audio: ${JSON.stringify(payload).slice(0, 300)}`);
-  }
-  return { ok: true, provider: "googleCloud", audioContent: payload.audioContent, mimeType: "audio/mpeg" };
-}
-
-function getGoogleTtsLanguageCode(targetLanguage) {
-  const languageMap = {
-    "zh-CN": "cmn-CN",
-    "zh-TW": "cmn-TW"
-  };
-  return languageMap[targetLanguage] || targetLanguage;
 }
 
 async function readJsonResponse(response, label) {

@@ -18,9 +18,7 @@ const DEFAULT_SETTINGS = {
   ttsVolcengineAppId: "",
   ttsVolcengineAccessToken: "",
   ttsVolcengineCluster: "volcano_tts",
-  ttsVolcengineVoiceType: "",
-  ttsGoogleApiKey: "",
-  ttsGoogleVoiceName: "",
+  ttsVolcengineVoiceType: "BV700_V2_streaming",
   ttsVolume: 1,
   ttsVoiceURI: "",
   translatorType: "publicGoogle",
@@ -28,7 +26,7 @@ const DEFAULT_SETTINGS = {
   apiKey: "",
   deepSeekApiKey: "",
   deepSeekModel: "deepseek-chat",
-  settingsVersion: 16
+  settingsVersion: 18
 };
 
 const MIN_PANEL_HEIGHT = 78;
@@ -62,8 +60,6 @@ const fields = {
   ttsVolcengineAccessTokenField: document.querySelector("#ttsVolcengineAccessTokenField"),
   ttsVolcengineClusterField: document.querySelector("#ttsVolcengineClusterField"),
   ttsVolcengineVoiceTypeField: document.querySelector("#ttsVolcengineVoiceTypeField"),
-  ttsGoogleApiKeyField: document.querySelector("#ttsGoogleApiKeyField"),
-  ttsGoogleVoiceNameField: document.querySelector("#ttsGoogleVoiceNameField"),
   ttsVoiceField: document.querySelector("#ttsVoiceField"),
   duckVolumeLevel: document.querySelector("#duckVolumeLevel"),
   duckVolumeValue: document.querySelector("#duckVolumeValue"),
@@ -75,8 +71,6 @@ const fields = {
   ttsVolcengineAccessToken: document.querySelector("#ttsVolcengineAccessToken"),
   ttsVolcengineCluster: document.querySelector("#ttsVolcengineCluster"),
   ttsVolcengineVoiceType: document.querySelector("#ttsVolcengineVoiceType"),
-  ttsGoogleApiKey: document.querySelector("#ttsGoogleApiKey"),
-  ttsGoogleVoiceName: document.querySelector("#ttsGoogleVoiceName"),
   ttsVolume: document.querySelector("#ttsVolume"),
   ttsVolumeValue: document.querySelector("#ttsVolumeValue"),
   ttsVoice: document.querySelector("#ttsVoice"),
@@ -134,9 +128,7 @@ function render(settings) {
   fields.ttsVolcengineAppId.value = settings.ttsVolcengineAppId || "";
   fields.ttsVolcengineAccessToken.value = settings.ttsVolcengineAccessToken || "";
   fields.ttsVolcengineCluster.value = normalizeVolcengineTtsCluster(settings.ttsVolcengineCluster);
-  fields.ttsVolcengineVoiceType.value = settings.ttsVolcengineVoiceType || "";
-  fields.ttsGoogleApiKey.value = settings.ttsGoogleApiKey || "";
-  fields.ttsGoogleVoiceName.value = settings.ttsGoogleVoiceName || "";
+  fields.ttsVolcengineVoiceType.value = normalizeVolcengineVoiceType(settings.ttsVolcengineVoiceType);
   fields.ttsVolume.value = String(Math.round(ttsVolume * 100));
   fields.ttsVolume.style.setProperty("--value", `${Math.round(ttsVolume * 100)}%`);
   fields.ttsVolumeValue.value = `${Math.round(ttsVolume * 100)}%`;
@@ -174,8 +166,6 @@ function bindEvents() {
     fields.ttsVolcengineAccessToken,
     fields.ttsVolcengineCluster,
     fields.ttsVolcengineVoiceType,
-    fields.ttsGoogleApiKey,
-    fields.ttsGoogleVoiceName,
     fields.ttsVolume,
     fields.ttsVoice,
     fields.asrEndpoint,
@@ -276,9 +266,7 @@ function readSettings() {
     ttsVolcengineAppId: fields.ttsVolcengineAppId.value.trim(),
     ttsVolcengineAccessToken: fields.ttsVolcengineAccessToken.value.trim(),
     ttsVolcengineCluster: normalizeVolcengineTtsCluster(fields.ttsVolcengineCluster.value),
-    ttsVolcengineVoiceType: fields.ttsVolcengineVoiceType.value.trim(),
-    ttsGoogleApiKey: fields.ttsGoogleApiKey.value.trim(),
-    ttsGoogleVoiceName: fields.ttsGoogleVoiceName.value.trim(),
+    ttsVolcengineVoiceType: normalizeVolcengineVoiceType(fields.ttsVolcengineVoiceType.value),
     ttsVolume: Number(fields.ttsVolume.value) / 100,
     ttsVoiceURI: fields.ttsVoice.value,
     asrEndpoint: normalizeHelperEndpoint(fields.asrEndpoint.value),
@@ -380,7 +368,6 @@ function updateConditionalFields() {
   const isVolcengineAsr = asrProvider === "volcengine";
   const isCustomTts = ttsProvider === "custom";
   const isVolcengineTts = ttsProvider === "volcengine";
-  const isGoogleTts = ttsProvider === "googleCloud";
   const isBrowserTts = ttsProvider === "browser";
 
   fields.ttsBaseUrlField.hidden = !isCustomTts;
@@ -390,8 +377,6 @@ function updateConditionalFields() {
   fields.ttsVolcengineAccessTokenField.hidden = !isVolcengineTts;
   fields.ttsVolcengineClusterField.hidden = !isVolcengineTts;
   fields.ttsVolcengineVoiceTypeField.hidden = !isVolcengineTts;
-  fields.ttsGoogleApiKeyField.hidden = !isGoogleTts;
-  fields.ttsGoogleVoiceNameField.hidden = !isGoogleTts;
   fields.ttsVoiceField.hidden = !isBrowserTts;
   fields.ttsBaseUrl.disabled = !isCustomTts;
   fields.ttsApiKey.disabled = !isCustomTts;
@@ -400,8 +385,6 @@ function updateConditionalFields() {
   fields.ttsVolcengineAccessToken.disabled = !isVolcengineTts;
   fields.ttsVolcengineCluster.disabled = !isVolcengineTts;
   fields.ttsVolcengineVoiceType.disabled = !isVolcengineTts;
-  fields.ttsGoogleApiKey.disabled = !isGoogleTts;
-  fields.ttsGoogleVoiceName.disabled = !isGoogleTts;
   fields.ttsVoice.disabled = !isBrowserTts;
 
   fields.asrEndpointField.hidden = false;
@@ -442,7 +425,7 @@ function normalizeVolcengineMode(mode) {
 }
 
 function normalizeTtsProvider(provider) {
-  if (provider === "custom" || provider === "volcengine" || provider === "googleCloud") {
+  if (provider === "custom" || provider === "volcengine") {
     return provider;
   }
   return "browser";
@@ -450,6 +433,12 @@ function normalizeTtsProvider(provider) {
 
 function normalizeVolcengineTtsCluster(cluster) {
   return String(cluster || "").trim() || DEFAULT_SETTINGS.ttsVolcengineCluster;
+}
+
+function normalizeVolcengineVoiceType(voiceType) {
+  const value = String(voiceType || "").trim();
+  const options = Array.from(fields.ttsVolcengineVoiceType?.options || []).map((option) => option.value);
+  return options.includes(value) ? value : DEFAULT_SETTINGS.ttsVolcengineVoiceType;
 }
 
 function normalizeTranslatorType(provider) {

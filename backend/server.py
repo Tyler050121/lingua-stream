@@ -86,7 +86,7 @@ video_cache_locks = {}
 model_cache_lock = threading.Lock()
 
 
-class PrepareYouTubeRequest(BaseModel):
+class PrepareVideoRequest(BaseModel):
     url: HttpUrl
     model: str = ""
     language: str = "en"
@@ -121,7 +121,8 @@ def root():
     return {
         "ok": True,
         "service": "LinguaStream backend",
-        "prepare_endpoint": "/prepare-youtube",
+        "prepare_endpoint": "/prepare-video",
+        "legacy_prepare_endpoint": "/prepare-youtube",
         "note": "Configure the extension popup endpoint as http://127.0.0.1:8787",
     }
 
@@ -130,7 +131,7 @@ def root():
 def transcribe_disabled():
     return {
         "ok": False,
-        "message": "Realtime /transcribe is disabled. Use POST /prepare-youtube.",
+        "message": "Realtime /transcribe is disabled. Use POST /prepare-video.",
     }
 
 
@@ -141,15 +142,17 @@ def empty_icon():
     return Response(status_code=204)
 
 
+@app.post("/prepare-video")
 @app.post("/prepare-youtube")
 @app.post("/transform")
-def prepare_youtube(payload: PrepareYouTubeRequest):
+def prepare_video(payload: PrepareVideoRequest):
+    platform_info = platform_info_for_url(str(payload.url))
     provider = normalize_recognizer_provider(payload.recognizer_provider)
     model_name = payload.model.strip() or default_model_for_provider(provider)
     language = payload.language or "en"
     job_id = safe_name(payload.job_id or "")
     update_progress(job_id, "starting", "正在读取视频信息...", 2)
-    cache_dir = CACHE_ROOT / cache_key_for_url(str(payload.url))
+    cache_dir = CACHE_ROOT / platform_info["cache_key"]
     cache_dir.mkdir(parents=True, exist_ok=True)
     timeline_path = cache_dir / f"timeline-{safe_name(provider)}-{safe_name(model_name)}-{safe_name(language)}.json"
 
@@ -176,16 +179,16 @@ def prepare_youtube(payload: PrepareYouTubeRequest):
             whisper = get_model(model_name)
         cleanup_cached_media(cache_dir)
         try:
-            audio_path, metadata = download_audio(str(payload.url), cache_dir, job_id)
+            audio_path, metadata = download_audio(str(payload.url), cache_dir, job_id, platform_info)
         except DownloadError as error:
             cleanup_cached_media(cache_dir)
             update_progress(job_id, "error", "下载失败", 0)
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    "yt-dlp could not download this YouTube video. "
+                    f"yt-dlp could not download this {platform_info['label']} video. "
                     "Try setting LINGUASTREAM_YTDLP_COOKIES_FILE=/path/to/cookies.txt, "
-                    "or LINGUASTREAM_YTDLP_COOKIES_BROWSER=safari/chrome with a browser that is logged into YouTube. "
+                    f"or LINGUASTREAM_YTDLP_COOKIES_BROWSER=safari/chrome with a browser that is logged into {platform_info['label']}. "
                     f"Original error: {error}"
                 ),
             ) from error
@@ -194,7 +197,7 @@ def prepare_youtube(payload: PrepareYouTubeRequest):
             update_progress(job_id, "error", "下载失败", 0)
             raise HTTPException(
                 status_code=502,
-                detail=f"yt-dlp could not prepare media for this YouTube video. Original error: {error}",
+                detail=f"yt-dlp could not prepare media for this {platform_info['label']} video. Original error: {error}",
             ) from error
         try:
             if provider == "volcengine":
@@ -432,7 +435,7 @@ def prepare_audio_for_volcengine(audio_path: str, cache_dir: Path, job_id: str =
             status_code=502,
             detail=(
                 "Volcengine ASR only accepts audio files such as MP3/WAV/OGG. "
-                "Install ffmpeg so LinguaStream can extract audio from the downloaded YouTube media."
+                "Install ffmpeg so LinguaStream can extract audio from the downloaded video media."
             ),
         )
 
@@ -504,7 +507,8 @@ def parse_duration_seconds(result: dict):
     duration = first_number(result, "duration", "audio_duration", "duration_ms")
     return normalize_volcengine_time(duration)
 
-def download_audio(url: str, output_dir: Path, job_id: str = ""):
+def download_audio(url: str, output_dir: Path, job_id: str = "", platform_info: dict | None = None):
+    platform_info = platform_info or platform_info_for_url(url)
     output_template = str(Path(output_dir) / "source.%(ext)s")
     options = {
         "outtmpl": output_template,
@@ -518,7 +522,7 @@ def download_audio(url: str, output_dir: Path, job_id: str = ""):
                 "Chrome/121.0.0.0 Safari/537.36"
             ),
             "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.youtube.com/",
+            "Referer": platform_info["referer"],
         },
         "progress_hooks": [make_progress_hook(job_id)],
     }
@@ -695,20 +699,66 @@ def cleanup_cached_media(cache_dir: Path):
 
 
 def cache_key_for_url(url: str):
+    return platform_info_for_url(url)["cache_key"]
+
+
+def platform_info_for_url(url: str):
     parsed = urlparse(url)
     host = parsed.netloc.lower()
     query = parse_qs(parsed.query)
-    video_id = ""
+
     if "youtube.com" in host:
         video_id = (query.get("v") or [""])[0]
-    elif "youtu.be" in host:
+        if video_id:
+            return {
+                "name": "youtube",
+                "label": "YouTube",
+                "cache_key": f"youtube-{safe_name(video_id)}",
+                "referer": "https://www.youtube.com/",
+            }
+    if "youtu.be" in host:
         video_id = parsed.path.strip("/").split("/")[0]
+        if video_id:
+            return {
+                "name": "youtube",
+                "label": "YouTube",
+                "cache_key": f"youtube-{safe_name(video_id)}",
+                "referer": "https://www.youtube.com/",
+            }
 
-    if video_id:
-        return f"youtube-{safe_name(video_id)}"
+    bilibili_id = bilibili_video_id(parsed)
+    if bilibili_id:
+        part = (query.get("p") or [""])[0]
+        cache_id = f"{bilibili_id}-p{part}" if part else bilibili_id
+        return {
+            "name": "bilibili",
+            "label": "Bilibili",
+            "cache_key": f"bilibili-{safe_name(cache_id)}",
+            "referer": "https://www.bilibili.com/",
+        }
 
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
-    return f"url-{digest}"
+    return {
+        "name": "url",
+        "label": "online",
+        "cache_key": f"url-{digest}",
+        "referer": f"{parsed.scheme}://{host}/" if parsed.scheme and host else "https://www.youtube.com/",
+    }
+
+
+def bilibili_video_id(parsed):
+    host = parsed.netloc.lower()
+    if "b23.tv" in host:
+        short_id = parsed.path.strip("/").split("/")[0]
+        return short_id or ""
+    if "bilibili.com" not in host:
+        return ""
+
+    parts = [part for part in parsed.path.split("/") if part]
+    for part in parts:
+        if part.startswith(("BV", "bv", "av", "AV", "ep", "EP", "ss", "SS", "md", "MD")):
+            return part
+    return ""
 
 
 def safe_name(value: str):
@@ -722,7 +772,6 @@ def choose_audio_format(metadata: dict) -> str:
         if item.get("format_id")
         and item.get("acodec") not in {None, "none"}
         and item.get("vcodec") not in {None, "none"}
-        and item.get("protocol") in {None, "https", "http"}
     ]
     for preferred_id in ("18", "22"):
         if any(item.get("format_id") == preferred_id for item in combined_fallback):
@@ -733,9 +782,8 @@ def choose_audio_format(metadata: dict) -> str:
         if item.get("format_id")
         and item.get("acodec") not in {None, "none"}
         and item.get("vcodec") in {None, "none"}
-        and item.get("protocol") in {None, "https", "http"}
     ]
-    candidates = combined_fallback or audio_only
+    candidates = audio_only or combined_fallback
     if not candidates:
         raise DownloadError("No downloadable audio format was found")
 

@@ -50,7 +50,6 @@
               <select id="ttsProvider">
                 <option value="browser">Browser</option>
                 <option value="volcengine">Volcengine</option>
-                <option value="googleCloud">Google Cloud</option>
                 <option value="custom">Custom</option>
               </select>
             </label>
@@ -82,27 +81,13 @@
 
             <label class="field" id="ttsVolcengineVoiceTypeField" hidden>
               <span>Voice Type <b class="required">*</b></span>
-              <input id="ttsVolcengineVoiceType" type="text" placeholder="BV700_streaming">
-            </label>
-
-            <label class="field" id="ttsGoogleApiKeyField" hidden>
-              <span>API Key <b class="required">*</b></span>
-              <div class="password-shell">
-                <input id="ttsGoogleApiKey" type="password" placeholder="AIza...">
-                <button class="password-toggle" type="button" data-password-toggle="ttsGoogleApiKey" aria-label="Show API Key" aria-pressed="false">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path class="eye-open" d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
-                    <path class="eye-open" d="M12 9.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6Z"></path>
-                    <path class="eye-closed" d="M3.5 5.5 20.5 18.5"></path>
-                    <path class="eye-closed" d="M10.7 10.4a2.8 2.8 0 0 0 3.5 3.5"></path>
-                  </svg>
-                </button>
-              </div>
-            </label>
-
-            <label class="field" id="ttsGoogleVoiceNameField" hidden>
-              <span>Voice Name</span>
-              <input id="ttsGoogleVoiceName" type="text" placeholder="Auto, e.g. cmn-CN-Wavenet-A">
+              <select id="ttsVolcengineVoiceType">
+                <option value="BV700_V2_streaming">灿灿 2.0</option>
+                <option value="BV705_streaming">炀炀</option>
+                <option value="BV701_V2_streaming">擎苍 2.0</option>
+                <option value="BV001_V2_streaming">通用女声 2.0</option>
+                <option value="BV700_streaming">灿灿</option>
+              </select>
             </label>
 
             <label class="field" id="ttsBaseUrlField">

@@ -2,21 +2,21 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-LinguaStream is a Chrome Manifest V3 extension that prepares a translated voice track for online videos. The current MVP focuses on YouTube and uses a **prepare first, then play** workflow instead of realtime tab-audio capture.
+LinguaStream is a Chrome Manifest V3 extension that prepares a translated voice track for online videos. The current MVP supports YouTube and Bilibili, and uses a **prepare first, then play** workflow instead of realtime tab-audio capture.
 
 ## What It Does
 
-1. A local backend temporarily downloads YouTube media with `yt-dlp`.
+1. A local backend temporarily downloads YouTube or Bilibili media with `yt-dlp`.
 2. Faster Whisper or Volcengine transcribes the video into timestamped English segments.
 3. The extension translates the timeline into the selected target language.
-4. The YouTube page speaks the translated timeline in sync with `video.currentTime`.
+4. The video page speaks the translated timeline in sync with `video.currentTime`.
 5. Translation timelines are cached, so the same video does not need to be translated again unless you force retry.
 
 ## Current Status
 
 This is an MVP for local use and early open-source development.
 
-- Supported site: YouTube video pages.
+- Supported sites: YouTube and Bilibili video pages.
 - Default ASR path: local backend + Faster Whisper.
 - Optional ASR provider: Volcengine via the backend.
 - Default TTS path: Chrome Web Speech API.
@@ -29,7 +29,7 @@ This is an MVP for local use and early open-source development.
 2. Enable **Developer mode**.
 3. Click **Load unpacked**.
 4. Select the `extension/` folder.
-5. Open a YouTube video.
+5. Open a YouTube or Bilibili video.
 6. Use the LinguaStream floating control in the lower-right corner of the video page.
 
 Preparing a video does not automatically start speaking. After preparation finishes, use the floating control to play, pause, cancel, or retry the translated voice track.
@@ -83,8 +83,10 @@ In the extension popup, set:
 
 The extension calls:
 
-- `POST /prepare-youtube`
+- `POST /prepare-video`
 - `GET /prepare-progress/<job_id>`
+
+The backend still accepts the legacy `POST /prepare-youtube` endpoint for existing extension settings or scripts.
 
 ## Popup Settings
 
@@ -94,9 +96,8 @@ The extension calls:
 
 ### Voice
 
-- `Voice Provider`: `Browser` uses Chrome Web Speech API. `Volcengine` and `Google Cloud` synthesize audio directly from the extension. `Custom` is reserved for compatible external TTS endpoints.
-- `Volcengine`: requires `APP ID`, `Access Token`, `Cluster`, and `Voice Type` from the Volcengine voice console. The default cluster is `volcano_tts`.
-- `Google Cloud`: requires a Text-to-Speech API key. `Voice Name` is optional; leave it empty to let Google choose a voice for the target language.
+- `Voice Provider`: `Browser` uses Chrome Web Speech API. `Volcengine` synthesizes audio directly from the extension. `Custom` is reserved for compatible external TTS endpoints.
+- `Volcengine`: requires `APP ID`, `Access Token`, `Cluster`, and `Voice Type` from the Volcengine voice console. The default cluster is `volcano_tts`, and Voice Type defaults to `BV700_V2_streaming`.
 - `Voice`: system/browser voice for the selected target language. Shown only for `Browser`.
 - `Voice Volume`: translated speech volume.
 - `Original Volume`: original video volume while translated voice playback is enabled. `100%` means no ducking.
@@ -162,6 +163,12 @@ For YouTube videos, the folder usually looks like:
 backend/cache/youtube-<video_id>/
 ```
 
+For Bilibili videos, the folder usually looks like:
+
+```text
+backend/cache/bilibili-<video_id>/
+```
+
 Media files are temporary and are deleted after transcription. To move the cache:
 
 ```bash
@@ -178,11 +185,11 @@ Translation runs with bounded background concurrency. Edit `extension/config/run
 
 Concurrency only affects fresh translations. Cached sentences are reused immediately.
 
-## YouTube Download Notes
+## Download Notes
 
 By default, the backend does not read browser cookies.
 
-If YouTube returns `HTTP Error 403: Forbidden`, run the backend with browser cookies:
+If YouTube or Bilibili returns `HTTP Error 403: Forbidden`, run the backend with browser cookies:
 
 ```bash
 LINGUASTREAM_YTDLP_COOKIES_BROWSER=chrome uvicorn server:app --host 127.0.0.1 --port 8787
@@ -209,7 +216,7 @@ LINGUASTREAM_YTDLP_BROWSER_PROFILE="/absolute/path/to/browser/profile/root" \
 uvicorn server:app --host 127.0.0.1 --port 8787
 ```
 
-If browser cookies trigger Keychain prompts or fail, export YouTube cookies to a Netscape-format `cookies.txt` file:
+If browser cookies trigger Keychain prompts or fail, export site cookies to a Netscape-format `cookies.txt` file:
 
 ```bash
 LINGUASTREAM_YTDLP_COOKIES_FILE=/absolute/path/to/cookies.txt uvicorn server:app --host 127.0.0.1 --port 8787
@@ -235,7 +242,7 @@ extension/                      Chrome unpacked extension root
 extension/manifest.json         Chrome MV3 manifest
 extension/background/           Settings, preparation orchestration, translation bridge
 extension/popup/                Extension popup UI
-extension/content/              YouTube floating control and synced playback
+extension/content/              YouTube/Bilibili floating control and synced playback
 backend/                        Local yt-dlp + Faster Whisper/Volcengine backend
 backend/config/helper.json      Backend concurrency configuration
 backend/cache/                  Ignored local ASR timeline cache
@@ -245,7 +252,7 @@ scratch/                        Ignored image generation experiments
 
 ## Known Limitations
 
-- The MVP currently targets YouTube only.
+- The MVP currently targets YouTube and Bilibili video pages.
 - Some videos may block `yt-dlp` downloads.
 - First preparation can take time because it downloads, transcribes, and translates the video.
 - `tiny.en` is fast but less accurate than larger Whisper models.
@@ -255,4 +262,4 @@ scratch/                        Ignored image generation experiments
 
 ## Privacy Notes
 
-API keys are stored in `chrome.storage.local`. Recognized text may be sent to the selected translation provider. If Volcengine ASR is selected, audio is sent by the backend to Volcengine. If Volcengine or Google Cloud TTS is selected, translated text is sent directly from the extension to that TTS provider. Review provider policies before using third-party services.
+API keys are stored in `chrome.storage.local`. Recognized text may be sent to the selected translation provider. If Volcengine ASR is selected, audio is sent by the backend to Volcengine. If Volcengine TTS is selected, translated text is sent directly from the extension to Volcengine. Review provider policies before using third-party services.

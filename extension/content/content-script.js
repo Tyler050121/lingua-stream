@@ -18,7 +18,7 @@
   async function init() {
     settings = await loadSettings();
     bindStorageUpdates();
-    bindYouTubeNavigation();
+    bindVideoPageNavigation();
     preparedPlayer = new PreparedTimelinePlayer();
     controlButton = new PageControlButton({
       onPrepare: prepareCurrentVideo,
@@ -50,9 +50,7 @@
       ttsVolcengineAppId: "",
       ttsVolcengineAccessToken: "",
       ttsVolcengineCluster: "volcano_tts",
-      ttsVolcengineVoiceType: "",
-      ttsGoogleApiKey: "",
-      ttsGoogleVoiceName: "",
+      ttsVolcengineVoiceType: "BV700_V2_streaming",
       ttsVolume: 1,
       ttsVoiceURI: "",
       translatorType: "publicGoogle",
@@ -175,10 +173,31 @@
     });
   }
 
-  function bindYouTubeNavigation() {
+  function bindVideoPageNavigation() {
     document.addEventListener("yt-navigate-finish", () => {
       window.setTimeout(() => ensureSchedulerForPage(), 300);
     });
+    window.addEventListener("popstate", () => {
+      window.setTimeout(() => ensureSchedulerForPage(), 300);
+    });
+    window.addEventListener("hashchange", () => {
+      window.setTimeout(() => ensureSchedulerForPage(), 300);
+    });
+    let lastHref = location.href;
+    window.setInterval(() => {
+      if (location.href === lastHref) return;
+      lastHref = location.href;
+      ensureSchedulerForPage();
+    }, 1000);
+
+    for (const method of ["pushState", "replaceState"]) {
+      const original = history[method];
+      history[method] = function patchedHistoryMethod(...args) {
+        const result = original.apply(this, args);
+        window.setTimeout(() => ensureSchedulerForPage(), 300);
+        return result;
+      };
+    }
   }
 
   async function ensureSchedulerForPage() {
@@ -210,11 +229,25 @@
   }
 
   function isWatchPage() {
-    return location.hostname.includes("youtube.com") && location.pathname === "/watch";
+    if (location.hostname.includes("youtube.com")) {
+      return location.pathname === "/watch";
+    }
+    if (location.hostname.includes("bilibili.com")) {
+      return location.pathname.startsWith("/video/") || location.pathname.startsWith("/bangumi/play/");
+    }
+    return false;
   }
 
   function getVideoKey() {
-    return new URLSearchParams(location.search).get("v") || location.href;
+    if (location.hostname.includes("youtube.com")) {
+      return `youtube:${new URLSearchParams(location.search).get("v") || location.href}`;
+    }
+    if (location.hostname.includes("bilibili.com")) {
+      const match = location.pathname.match(/\/(video|bangumi\/play)\/([^/?#]+)/);
+      const part = new URLSearchParams(location.search).get("p") || "";
+      return `bilibili:${match?.[2] || location.pathname}:${part}`;
+    }
+    return location.href;
   }
 
   class PreparedTimelinePlayer {
@@ -334,7 +367,7 @@
 
     speak(segment, currentTime) {
       const provider = normalizeTtsProvider(settings?.ttsProvider);
-      if (provider === "volcengine" || provider === "googleCloud") {
+      if (provider === "volcengine") {
         this.speakWithProvider(segment, currentTime);
         return;
       }
@@ -420,6 +453,7 @@
         }, estimateSpeechTimeout(text, timing));
       } catch (error) {
         warn("Provider TTS failed; falling back to browser voice", error);
+        controlButton?.setStatus?.("火山 TTS 失败，已回退浏览器语音", { statusKind: "error" });
         if (this.currentExternalSpeech?.token === token) {
           this.currentExternalSpeech = null;
         }
@@ -534,7 +568,7 @@
   }
 
   function normalizeTtsProvider(provider) {
-    if (provider === "volcengine" || provider === "googleCloud" || provider === "custom") {
+    if (provider === "volcengine" || provider === "custom") {
       return provider;
     }
     return "browser";

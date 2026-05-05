@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "LinguaStream - Video Translator",
   "short_name": "LinguaStream",
-  "description": "Prepares a YouTube video transcript locally, translates English speech to Simplified Chinese, and speaks it in sync with playback.",
+  "description": "Prepares YouTube and Bilibili video transcripts locally, translates English speech to Simplified Chinese, and speaks it in sync with playback.",
   "version": "0.3.4",
   "icons": {
     "16": "assets/icons/linguastream-icon-16.png",
@@ -32,6 +32,9 @@
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://m.youtube.com/*",
+    "https://www.bilibili.com/*",
+    "https://m.bilibili.com/*",
+    "https://b23.tv/*",
     "https://*/*",
     "http://*/*"
   ],
@@ -39,7 +42,10 @@
     {
       "matches": [
         "https://www.youtube.com/*",
-        "https://m.youtube.com/*"
+        "https://m.youtube.com/*",
+        "https://www.bilibili.com/*",
+        "https://m.bilibili.com/*",
+        "https://b23.tv/*"
       ],
       "js": [
         "config/runtime.js",
@@ -59,7 +65,10 @@
       ],
       "matches": [
         "https://www.youtube.com/*",
-        "https://m.youtube.com/*"
+        "https://m.youtube.com/*",
+        "https://www.bilibili.com/*",
+        "https://m.bilibili.com/*",
+        "https://b23.tv/*"
       ]
     }
   ]
